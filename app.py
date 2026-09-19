@@ -54,7 +54,8 @@ log = logging.getLogger("biodiversiteit-verkenner")
 REQUEST_LOCK = threading.Lock()
 LAST_REQUEST_AT = 0.0
 MIN_REQUEST_INTERVAL = 1.02  # iNaturalist asks clients to remain near 60 requests/minute.
-MAX_FAST_SPECIES = 3000
+SPATIAL_RESULT_LIMIT = 9500
+MAX_SPATIAL_DEPTH = 7
 
 
 def checkpoint(message):
@@ -319,11 +320,13 @@ def split_bbox(bbox):
     south, west, north, east = bbox
     mid_lat = (south + north) / 2
     mid_lng = (west + east) / 2
+    upper_south = math.nextafter(mid_lat, north)
+    right_west = math.nextafter(mid_lng, east)
     return [
         (south, west, mid_lat, mid_lng),
-        (south, mid_lng, mid_lat, east),
-        (mid_lat, west, north, mid_lng),
-        (mid_lat, mid_lng, north, east),
+        (south, right_west, mid_lat, east),
+        (upper_south, west, north, mid_lng),
+        (upper_south, right_west, north, east),
     ]
 
 
@@ -375,10 +378,11 @@ def fetch_observation_tile(base_params_tuple, bbox, depth=0):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_area_species_counts(base_params_tuple, bbox):
-    """Fetch aggregated species counts for a bbox in a small number of calls."""
+def fetch_area_species_count_tile(base_params_tuple, bbox, depth=0):
+    """Fetch one species-count tile, splitting it before the API's 10k ceiling."""
     base = dict(base_params_tuple)
     south, west, north, east = bbox
+
     def fetch_page(page):
         params = dict(base)
         params.update({
@@ -389,7 +393,16 @@ def fetch_area_species_counts(base_params_tuple, bbox):
 
     first = fetch_page(1)
     total = int(first.get("total_results", 0) or 0)
-    page_count = min(math.ceil(total / 500), math.ceil(MAX_FAST_SPECIES / 500))
+
+    if total > SPATIAL_RESULT_LIMIT and depth < MAX_SPATIAL_DEPTH:
+        child_results = [
+            fetch_area_species_count_tile(base_params_tuple, child, depth + 1)
+            for child in split_bbox(bbox)
+        ]
+        rows = [row for child_rows, _, _ in child_results for row in child_rows]
+        return rows, sum(item[1] for item in child_results), any(item[2] for item in child_results)
+
+    page_count = min(20, max(1, math.ceil(min(total, 10000) / 500)))
     pages = {1: first.get("results", [])}
     if page_count > 1:
         with ThreadPoolExecutor(max_workers=min(6, page_count - 1)) as executor:
@@ -401,7 +414,32 @@ def fetch_area_species_counts(base_params_tuple, bbox):
             "count": int(item.get("count") or 0),
             "taxon": compact_taxon(item.get("taxon")),
         } for item in raw_rows]
-    return rows[:MAX_FAST_SPECIES], total, total > MAX_FAST_SPECIES
+    return rows, total, total > 10000
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_area_species_counts(base_params_tuple, bbox):
+    """Fetch all species counts and merge spatial tiles by taxon ID."""
+    rows, _, truncated = fetch_area_species_count_tile(base_params_tuple, bbox, 0)
+    merged = {}
+    unidentified = []
+    for row in rows:
+        taxon = row.get("taxon") or {}
+        taxon_id = taxon.get("id")
+        if not taxon_id:
+            unidentified.append(row)
+            continue
+        taxon_id = int(taxon_id)
+        if taxon_id not in merged:
+            merged[taxon_id] = {"count": 0, "taxon": taxon}
+        merged[taxon_id]["count"] += int(row.get("count") or 0)
+
+    combined = sorted(
+        [*merged.values(), *unidentified],
+        key=lambda row: int(row.get("count") or 0),
+        reverse=True,
+    )
+    return combined, len(combined), truncated
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -745,7 +783,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.6 · Engelse soortnamen</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.7 · grote gebieden compleet</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1131,6 +1169,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.6 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.7 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
