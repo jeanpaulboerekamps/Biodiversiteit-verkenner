@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.5
+# Biodiversiteit Verkenner 1.6
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -10,8 +10,9 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Vóór de zoekactie filteren op kalendermaanden, waarnemingskwaliteit, grote
   soortgroep en een opgezochte orde of familie.
 - Soorten rangschikken op het aantal waarnemingen in het gekozen gebied.
-- Foto, Nederlandse naam, wetenschappelijke naam en iNaturalist-link tonen in
+- Foto, Engelse naam, wetenschappelijke naam en iNaturalist-link tonen in
   een responsief raster.
+- Engelse iNaturalist-soortnamen gebruiken zonder Nederlandse plaatsvoorkeur.
 - Snelle berekening met geaggregeerde soortaantallen en parallel opgehaalde
   taxonomie en persoonlijke soortenpagina's.
 - Maanden kiezen met afzonderlijke ronde meerkeuzevakjes.

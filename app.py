@@ -298,8 +298,7 @@ def search_orders_and_families(query):
     payload = request_json(TAXA_AUTOCOMPLETE_API, {
         "q": query,
         "per_page": 30,
-        "locale": "nl",
-        "preferred_place_id": 7506,
+        "locale": "en",
     })
     results = []
     for taxon in payload.get("results", []):
@@ -406,14 +405,14 @@ def fetch_area_species_counts(base_params_tuple, bbox):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fetch_taxa_by_ids(ids_tuple, locale="nl"):
+def fetch_taxa_by_ids(ids_tuple, locale="en"):
     ids = sorted({int(x) for x in ids_tuple if x})
     batches = [ids[i:i + 30] for i in range(0, len(ids), 30)]
 
     def fetch_batch(batch):
         payload = request_json(
             f"{TAXA_API}/" + ",".join(str(x) for x in batch),
-            {"per_page": len(batch), "locale": locale, "preferred_place_id": 7506},
+            {"per_page": len(batch), "locale": locale},
         )
         out = {}
         for taxon in payload.get("results", []):
@@ -437,7 +436,7 @@ def fetch_taxa_by_ids(ids_tuple, locale="nl"):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fetch_leaf_taxonomy(ids_tuple, locale="nl"):
+def fetch_leaf_taxonomy(ids_tuple, locale="en"):
     """Fetch leaf taxa; each response already carries its complete ancestors."""
     ids = sorted({int(x) for x in ids_tuple if x})
     batches = [ids[i:i + 30] for i in range(0, len(ids), 30)]
@@ -459,7 +458,7 @@ def fetch_leaf_taxonomy(ids_tuple, locale="nl"):
     def fetch_batch(batch):
         payload = request_json(
             f"{TAXA_API}/" + ",".join(str(x) for x in batch),
-            {"per_page": len(batch), "locale": locale, "preferred_place_id": 7506},
+            {"per_page": len(batch), "locale": locale},
         )
         out = {}
         for taxon in payload.get("results", []):
@@ -522,7 +521,7 @@ def build_area_species(observations, geometry):
         order_nl, order_scientific = rank_names(order_id, lookup)
         row = grouped.setdefault(species_id, {
             "species_id": species_id,
-            "Nederlandse naam": species.get("preferred_common_name") or species.get("name") or taxon.get("preferred_common_name") or taxon.get("name"),
+            "Engelse naam": species.get("preferred_common_name") or species.get("name") or taxon.get("preferred_common_name") or taxon.get("name"),
             "Wetenschappelijke naam": species.get("name") or taxon.get("name"),
             "Waarnemingen in gebied": 0,
             "Familie": family_nl or family_scientific or "Onbekend",
@@ -539,7 +538,7 @@ def build_area_species(observations, geometry):
             row["Foto"] = observation.get("photo") or ""
 
     columns = [
-        "species_id", "Nederlandse naam", "Wetenschappelijke naam",
+        "species_id", "Engelse naam", "Wetenschappelijke naam",
         "Waarnemingen in gebied", "Familie", "Familie wetenschappelijk", "family_id",
         "Orde", "Orde wetenschappelijk", "order_id", "Foto", "iNaturalist",
     ]
@@ -547,7 +546,7 @@ def build_area_species(observations, geometry):
         return pd.DataFrame(columns=columns), len(inside)
     frame = pd.DataFrame(grouped.values())
     return frame.sort_values(
-        ["Waarnemingen in gebied", "Nederlandse naam"], ascending=[False, True]
+        ["Waarnemingen in gebied", "Engelse naam"], ascending=[False, True]
     ).reset_index(drop=True), len(inside)
 
 
@@ -568,7 +567,7 @@ def build_fast_area_species(count_rows, group_label=""):
             continue
         row = grouped.setdefault(species_id, {
             "species_id": species_id,
-            "Nederlandse naam": taxon.get("preferred_common_name") or taxon.get("name"),
+            "Engelse naam": taxon.get("preferred_common_name") or taxon.get("name"),
             "Wetenschappelijke naam": taxon.get("name"),
             "Waarnemingen in gebied": 0,
             "Familie": "",
@@ -582,7 +581,7 @@ def build_fast_area_species(count_rows, group_label=""):
         })
         row["Waarnemingen in gebied"] += int(item.get("count") or 0)
     columns = [
-        "species_id", "Nederlandse naam", "Wetenschappelijke naam",
+        "species_id", "Engelse naam", "Wetenschappelijke naam",
         "Waarnemingen in gebied", "Familie", "Familie wetenschappelijk", "family_id",
         "Orde", "Orde wetenschappelijk", "order_id", "Foto", "iNaturalist",
     ]
@@ -591,7 +590,7 @@ def build_fast_area_species(count_rows, group_label=""):
     frame = pd.DataFrame(grouped.values())
     total_observations = int(frame["Waarnemingen in gebied"].sum())
     return frame.sort_values(
-        ["Waarnemingen in gebied", "Nederlandse naam"], ascending=[False, True]
+        ["Waarnemingen in gebied", "Engelse naam"], ascending=[False, True]
     ).reset_index(drop=True), total_observations
 
 
@@ -627,8 +626,7 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
             "user_id": username,
             "per_page": 500,
             "page": page,
-            "locale": "nl",
-            "preferred_place_id": 7506,
+            "locale": "en",
         }
         if iconic_taxa:
             params["iconic_taxa"] = iconic_taxa
@@ -678,7 +676,7 @@ def pie_frame(frame, max_slices=14):
     if frame.empty:
         return pd.DataFrame(columns=["Soort", "Waarnemingen"])
     grouped = (
-        frame.groupby("Nederlandse naam", dropna=False)["Waarnemingen in gebied"]
+        frame.groupby("Engelse naam", dropna=False)["Waarnemingen in gebied"]
         .sum().sort_values(ascending=False)
     )
     if len(grouped) > max_slices:
@@ -703,7 +701,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
         )
     cards = []
     for _, row in frame.head(shown).iterrows():
-        name = html.escape(str(row.get("Nederlandse naam") or row.get("Wetenschappelijke naam") or "Onbekende soort"))
+        name = html.escape(str(row.get("Engelse naam") or row.get("Wetenschappelijke naam") or "Unknown species"))
         scientific = html.escape(str(row.get("Wetenschappelijke naam") or ""))
         photo_url = html.escape(str(row.get("Foto") or ""), quote=True)
         taxon_url = html.escape(str(row.get("iNaturalist") or "#"), quote=True)
@@ -730,7 +728,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
             '</div></a></article>'
         )
     st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
-    columns = ["Nederlandse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
+    columns = ["Engelse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
     if include_personal:
         columns.append("Mijn waarnemingen wereldwijd")
     columns += ["Familie", "Orde"]
@@ -747,7 +745,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.5 · gerichte persoonlijke vergelijking</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.6 · Engelse soortnamen</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -939,8 +937,7 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
         "d1": f"{year_range[0]}-01-01",
         "d2": f"{year_range[1]}-12-31",
         "geo": "true",
-        "locale": "nl",
-        "preferred_place_id": 7506,
+        "locale": "en",
         "order_by": "observed_on",
         "order": "desc",
     }
@@ -1134,6 +1131,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.5 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.6 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
