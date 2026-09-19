@@ -36,6 +36,7 @@ log = logging.getLogger("biodiversiteit-verkenner")
 REQUEST_LOCK = threading.Lock()
 LAST_REQUEST_AT = 0.0
 MIN_REQUEST_INTERVAL = 1.02  # iNaturalist asks clients to remain near 60 requests/minute.
+MAX_FAST_SPECIES = 3000
 
 
 def checkpoint(message):
@@ -62,12 +63,31 @@ div.stButton > button, div.stDownloadButton > button {
   border:1px solid rgba(30,136,229,.2);background:linear-gradient(135deg,#eef8ff,#f2fbf4)}
 .active-area {padding:.7rem .9rem;border-radius:14px;background:rgba(33,150,243,.08);
   border-left:4px solid #2196f3;margin:.2rem 0 .7rem}
+.species-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+  gap:1rem;margin:.75rem 0 1rem}
+.species-card {min-width:0;border:1px solid rgba(49,63,72,.18);border-radius:14px;
+  overflow:hidden;background:var(--secondary-background-color);box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.species-card a {color:inherit;text-decoration:none}
+.species-photo {display:block;width:100%;height:178px;object-fit:cover;background:#e5e7e9}
+.species-photo-empty {height:178px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#dce9ef,#edf5e7);font-size:2.2rem}
+.species-body {padding:.8rem .85rem .9rem}
+.species-name {font-size:1.08rem;font-weight:750;line-height:1.15;margin-bottom:.18rem}
+.species-scientific {font-size:.88rem;font-style:italic;opacity:.68;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;margin-bottom:.62rem}
+.species-stats {display:flex;gap:.45rem;flex-wrap:wrap;margin-bottom:.55rem}
+.species-pill {font-size:.78rem;padding:.2rem .45rem;border-radius:999px;
+  background:rgba(33,150,243,.12)}
+.species-taxonomy {font-size:.78rem;line-height:1.35;opacity:.72}
 [data-testid="stFileUploaderDropzone"] {padding:.15rem 0;border:0;background:transparent}
 [data-testid="stFileUploaderDropzoneInstructions"] {display:none}
 [data-testid="stFileUploaderDropzone"] button {font-size:0;min-height:46px}
 [data-testid="stFileUploaderDropzone"] button::after {content:"Kies gebied";font-size:1rem}
 [data-testid="stFileUploaderFile"] {display:none}
 @media (max-width:768px){.block-container{padding-left:.8rem;padding-right:.8rem}}
+@media (max-width:540px){.species-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}
+  .species-photo,.species-photo-empty{height:132px}.species-body{padding:.65rem}
+  .species-name{font-size:.95rem}.species-taxonomy{display:none}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -247,6 +267,33 @@ def fetch_observation_tile(base_params_tuple, bbox, depth=0):
     return rows, total, total > 10000
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_area_species_counts(base_params_tuple, bbox):
+    """Fetch aggregated species counts for a bbox in a small number of calls."""
+    base = dict(base_params_tuple)
+    south, west, north, east = bbox
+    rows = []
+    page = 1
+    total = 0
+    while len(rows) < MAX_FAST_SPECIES:
+        params = dict(base)
+        params.update({
+            "swlat": south, "swlng": west, "nelat": north, "nelng": east,
+            "page": page, "per_page": 500,
+        })
+        payload = request_json(SPECIES_COUNTS_API, params)
+        batch = payload.get("results", [])
+        total = int(payload.get("total_results", 0) or 0)
+        rows.extend({
+            "count": int(item.get("count") or 0),
+            "taxon": compact_taxon(item.get("taxon")),
+        } for item in batch)
+        if not batch or len(batch) < 500 or len(rows) >= total:
+            break
+        page += 1
+    return rows[:MAX_FAST_SPECIES], total, total > MAX_FAST_SPECIES
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_taxa_by_ids(ids_tuple, locale="nl"):
     ids = sorted({int(x) for x in ids_tuple if x})
@@ -353,6 +400,58 @@ def build_area_species(observations, geometry):
     ).reset_index(drop=True), len(inside)
 
 
+def build_fast_area_species(count_rows):
+    """Turn the API's aggregated leaf taxa into one row per species."""
+    ancestor_ids = {
+        int(tid)
+        for item in count_rows
+        for tid in (item.get("taxon", {}).get("ancestor_ids") or [])
+    }
+    lookup = fetch_taxa_by_ids(tuple(sorted(ancestor_ids)))
+    grouped = {}
+    for item in count_rows:
+        taxon = item.get("taxon") or {}
+        species_id = (
+            int(taxon["id"])
+            if taxon.get("rank") == "species" and taxon.get("id")
+            else rank_id(taxon, lookup, "species")
+        )
+        if not species_id:
+            continue
+        species = lookup.get(species_id, {})
+        family_id = rank_id(taxon, lookup, "family")
+        order_id = rank_id(taxon, lookup, "order")
+        family_nl, family_scientific = rank_names(family_id, lookup)
+        order_nl, order_scientific = rank_names(order_id, lookup)
+        row = grouped.setdefault(species_id, {
+            "species_id": species_id,
+            "Nederlandse naam": taxon.get("preferred_common_name") or species.get("preferred_common_name") or taxon.get("name"),
+            "Wetenschappelijke naam": species.get("name") or taxon.get("name"),
+            "Waarnemingen in gebied": 0,
+            "Familie": family_nl or family_scientific or "Onbekend",
+            "Familie wetenschappelijk": family_scientific or "Onbekend",
+            "family_id": family_id,
+            "Orde": order_nl or order_scientific or "Onbekend",
+            "Orde wetenschappelijk": order_scientific or "Onbekend",
+            "order_id": order_id,
+            "Foto": taxon.get("photo") or species.get("photo") or "",
+            "iNaturalist": f"https://www.inaturalist.org/taxa/{species_id}",
+        })
+        row["Waarnemingen in gebied"] += int(item.get("count") or 0)
+    columns = [
+        "species_id", "Nederlandse naam", "Wetenschappelijke naam",
+        "Waarnemingen in gebied", "Familie", "Familie wetenschappelijk", "family_id",
+        "Orde", "Orde wetenschappelijk", "order_id", "Foto", "iNaturalist",
+    ]
+    if not grouped:
+        return pd.DataFrame(columns=columns), 0
+    frame = pd.DataFrame(grouped.values())
+    total_observations = int(frame["Waarnemingen in gebied"].sum())
+    return frame.sort_values(
+        ["Waarnemingen in gebied", "Nederlandse naam"], ascending=[False, True]
+    ).reset_index(drop=True), total_observations
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_personal_lifelist(username):
     username = (username or "").strip()
@@ -418,7 +517,7 @@ def pie_frame(frame, max_slices=14):
     return grouped.rename_axis("Soort").reset_index(name="Waarnemingen")
 
 
-def show_species_table(frame, include_personal=False, key="species"):
+def show_species_grid(frame, include_personal=False, key="species"):
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
@@ -431,22 +530,41 @@ def show_species_table(frame, include_personal=False, key="species"):
             "Aantal soorten tonen", 10 if maximum >= 10 else 1, maximum, default,
             key=f"limit_{key}",
         )
-    columns = ["Foto", "Nederlandse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
+    cards = []
+    for _, row in frame.head(shown).iterrows():
+        name = html.escape(str(row.get("Nederlandse naam") or row.get("Wetenschappelijke naam") or "Onbekende soort"))
+        scientific = html.escape(str(row.get("Wetenschappelijke naam") or ""))
+        photo_url = html.escape(str(row.get("Foto") or ""), quote=True)
+        taxon_url = html.escape(str(row.get("iNaturalist") or "#"), quote=True)
+        family = html.escape(str(row.get("Familie") or "Onbekend"))
+        order = html.escape(str(row.get("Orde") or "Onbekend"))
+        observations = int(row.get("Waarnemingen in gebied") or 0)
+        personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
+        photo = (
+            f'<img class="species-photo" src="{photo_url}" alt="{name}" loading="lazy">'
+            if photo_url else '<div class="species-photo-empty">🌿</div>'
+        )
+        personal_pill = (
+            f'<span class="species-pill">Mijn totaal: {personal:,}</span>'
+            if include_personal else ""
+        )
+        cards.append(
+            '<article class="species-card">'
+            f'<a href="{taxon_url}" target="_blank" rel="noopener">{photo}'
+            '<div class="species-body">'
+            f'<div class="species-name">{name}</div>'
+            f'<div class="species-scientific">{scientific}</div>'
+            '<div class="species-stats">'
+            f'<span class="species-pill">{observations:,} in gebied</span>{personal_pill}'
+            '</div>'
+            f'<div class="species-taxonomy">{family}<br>{order}</div>'
+            '</div></a></article>'
+        )
+    st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
+    columns = ["Nederlandse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
     if include_personal:
         columns.append("Mijn waarnemingen wereldwijd")
-    columns += ["Familie", "Orde", "iNaturalist"]
-    st.dataframe(
-        frame.head(shown)[columns],
-        width="stretch",
-        hide_index=True,
-        height=min(720, 44 + shown * 38),
-        column_config={
-            "Foto": st.column_config.ImageColumn("Foto", width="small"),
-            "iNaturalist": st.column_config.LinkColumn("iNaturalist", display_text="Open"),
-            "Waarnemingen in gebied": st.column_config.NumberColumn(format="%d"),
-            "Mijn waarnemingen wereldwijd": st.column_config.NumberColumn(format="%d"),
-        },
-    )
+    columns += ["Familie", "Orde"]
     export_columns = [c for c in columns if c not in {"Foto", "iNaturalist"}]
     st.download_button(
         "⬇️ Tabel downloaden als CSV",
@@ -459,7 +577,7 @@ def show_species_table(frame, include_personal=False, key="species"):
 
 init_state()
 
-st.markdown('<span class="release-badge">Eerste publieksversie 1.0</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.1 · snel zoeken en fotoraster</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -609,6 +727,16 @@ quality_value = {
     "Alle kwaliteitsniveaus": "",
     "Alleen Research Grade": "research",
 }[quality_label]
+calculation_mode = st.radio(
+    "Berekening",
+    ["Snel (aanbevolen)", "Exact binnen getekende grens"],
+    horizontal=True,
+    help=(
+        "De snelle stand gebruikt de kleinste rechthoek om het gebied en haalt direct "
+        "soortaantallen op. De exacte stand controleert iedere losse waarneming en kan "
+        "bij grote of druk bezochte gebieden veel langer duren."
+    ),
+)
 
 active_area = st.session_state.active_area
 can_explore = bool(active_area and active_area in st.session_state.areas and selected_months)
@@ -628,30 +756,30 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
     if quality_value:
         base_params["quality_grade"] = quality_value
 
-    queries = [None] if len(selected_months) == 12 else selected_months
-    observations, api_total, truncated = [], 0, False
-    with st.status("Gebiedssoorten verzamelen…", expanded=True) as status:
-        for index, month in enumerate(queries, 1):
-            params = dict(base_params)
-            if month is not None:
-                params["month"] = int(month)
-                st.write(f"Waarnemingen voor {MONTHS[month]} ophalen…")
-            else:
-                st.write("Waarnemingen voor alle maanden ophalen…")
-            rows, total, was_truncated = fetch_observation_tile(
-                tuple(sorted(params.items())), (south, west, north, east), 0
-            )
-            observations.extend(rows)
-            api_total += total
-            truncated = truncated or was_truncated
+    if len(selected_months) < 12:
+        base_params["month"] = ",".join(str(month) for month in selected_months)
 
-        unique_observations = {
-            int(row["id"]): row for row in observations if row.get("id") is not None
-        }
-        st.write("Waarnemingen exact binnen de getekende grens controleren…")
-        area_frame, exact_observations = build_area_species(
-            list(unique_observations.values()), geometry
-        )
+    api_total, truncated = 0, False
+    with st.status("Gebiedssoorten verzamelen…", expanded=True) as status:
+        if calculation_mode.startswith("Snel"):
+            st.write("Geaggregeerde soorten en aantallen ophalen…")
+            count_rows, api_total, truncated = fetch_area_species_counts(
+                tuple(sorted(base_params.items())), (south, west, north, east)
+            )
+            st.write(f"Taxonomie en foto's van {len(count_rows):,} gevonden taxa verwerken…")
+            area_frame, observation_total = build_fast_area_species(count_rows)
+        else:
+            st.write("Losse waarnemingen ophalen…")
+            observations, api_total, truncated = fetch_observation_tile(
+                tuple(sorted(base_params.items())), (south, west, north, east), 0
+            )
+            unique_observations = {
+                int(row["id"]): row for row in observations if row.get("id") is not None
+            }
+            st.write("Waarnemingen exact binnen de getekende grens controleren…")
+            area_frame, observation_total = build_area_species(
+                list(unique_observations.values()), geometry
+            )
 
         personal_counts, personal_families, personal_species = {}, set(), 0
         if username:
@@ -671,9 +799,10 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "years": year_range,
             "months": selected_months,
             "api_total": api_total,
-            "exact_observations": exact_observations,
+            "observation_total": observation_total,
             "truncated": truncated,
             "personal_species": personal_species,
+            "calculation_mode": calculation_mode,
         }
         status.update(label="Verkenning gereed", state="complete")
 
@@ -718,12 +847,16 @@ if frame is not None:
 
     if meta.get("truncated"):
         st.warning(
-            "Minstens één zeer dicht waarnemingsvak bereikte na onderverdeling nog de "
-            "iNaturalist-grens. De rangorde is bruikbaar, maar enkele aantallen kunnen te laag zijn."
+            "De veiligheidsgrens voor een zeer soortenrijk gebied is bereikt. De meest "
+            "waargenomen soorten staan erin, maar zeldzamere soorten kunnen ontbreken."
         )
+    if str(meta.get("calculation_mode", "")).startswith("Snel"):
+        area_note = "binnen de kleinste rechthoek om het gekozen gebied"
+    else:
+        area_note = "exact binnen de getekende grens"
     st.caption(
-        f"Gebaseerd op {meta.get('exact_observations', 0):,} exact binnen de grens gelegen "
-        f"waarnemingen in {meta.get('years', ('?', '?'))[0]}–{meta.get('years', ('?', '?'))[1]}. "
+        f"Gebaseerd op {meta.get('observation_total', 0):,} waarnemingen {area_note} in "
+        f"{meta.get('years', ('?', '?'))[0]}–{meta.get('years', ('?', '?'))[1]}. "
         "Historische waarnemingen geven een kansbeeld, geen garantie dat een soort aanwezig is."
     )
 
@@ -742,21 +875,21 @@ if frame is not None:
     if overview_options[0] in overviews:
         st.markdown("### Welke soorten kan ik zien?")
         st.caption("Meeste waarnemingen in het gekozen gebied en de gekozen maanden eerst.")
-        show_species_table(filtered, key="soorten_in_gebied")
+        show_species_grid(filtered, key="soorten_in_gebied")
 
     if overview_options[1] in overviews:
         st.markdown("### Welke soorten heb ik zelf nog nooit gezien?")
         if not meta.get("username"):
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
         else:
-            show_species_table(unseen, key="nog_nooit_gezien")
+            show_species_grid(unseen, key="nog_nooit_gezien")
 
     if overview_options[2] in overviews:
         st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
         if not meta.get("username"):
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
         else:
-            show_species_table(filtered, include_personal=True, key="mijn_ervaring_per_soort")
+            show_species_grid(filtered, include_personal=True, key="mijn_ervaring_per_soort")
 
     if overview_options[3] in overviews:
         st.markdown("### Verdeling van de waarnemingen")
@@ -795,10 +928,10 @@ if frame is not None:
             st.caption(
                 "Van deze families staat nog geen enkele soort op jouw wereldwijde iNaturalist-soortenlijst."
             )
-            show_species_table(new_family, key="nieuwe_families")
+            show_species_grid(new_family, key="nieuwe_families")
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.0 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.1 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )

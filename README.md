@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.0
+# Biodiversiteit Verkenner 1.1
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -9,7 +9,10 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Standaard zoeken in de laatste tien kalenderjaren.
 - Filteren op kalendermaanden, waarnemingskwaliteit, orde en familie.
 - Soorten rangschikken op het aantal waarnemingen in het gekozen gebied.
-- Foto, Nederlandse naam, wetenschappelijke naam en iNaturalist-link tonen.
+- Foto, Nederlandse naam, wetenschappelijke naam en iNaturalist-link tonen in
+  een responsief raster.
+- Snelle standaardberekening met geaggregeerde soortaantallen, plus een
+  optionele exacte stand voor onregelmatige gebiedsgrenzen.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
 - Taartdiagrammen maken voor alle soorten en nog nooit geziene soorten.
@@ -32,8 +35,10 @@ python -m streamlit run app.py
 
 Er zijn geen wachtwoorden, API-sleutels of Streamlit Secrets nodig.
 De app begrenst API-verzoeken tot ongeveer zestig per minuut, overeenkomstig
-de richtlijn van iNaturalist. Zeer grote of intensief onderzochte gebieden
-kunnen daardoor enkele minuten nodig hebben.
+de richtlijn van iNaturalist. De snelle stand gebruikt de kleinste rechthoek om
+het gekozen gebied. Kies alleen de exacte stand wanneer waarnemingen buiten een
+onregelmatige grens beslist niet mogen meetellen; deze stand kan veel langer
+duren.
 
 ## Belangrijk
 
