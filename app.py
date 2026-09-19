@@ -84,6 +84,7 @@ div.stButton > button, div.stDownloadButton > button {
 [data-testid="stFileUploaderDropzone"] button {font-size:0;min-height:46px}
 [data-testid="stFileUploaderDropzone"] button::after {content:"Kies gebied";font-size:1rem}
 [data-testid="stFileUploaderFile"] {display:none}
+[data-testid="stCheckbox"] [data-baseweb="checkbox"] > div {border-radius:50% !important}
 @media (max-width:768px){.block-container{padding-left:.8rem;padding-right:.8rem}}
 @media (max-width:540px){.species-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}
   .species-photo,.species-photo-empty{height:132px}.species-body{padding:.65rem}
@@ -272,25 +273,28 @@ def fetch_area_species_counts(base_params_tuple, bbox):
     """Fetch aggregated species counts for a bbox in a small number of calls."""
     base = dict(base_params_tuple)
     south, west, north, east = bbox
-    rows = []
-    page = 1
-    total = 0
-    while len(rows) < MAX_FAST_SPECIES:
+    def fetch_page(page):
         params = dict(base)
         params.update({
             "swlat": south, "swlng": west, "nelat": north, "nelng": east,
             "page": page, "per_page": 500,
         })
-        payload = request_json(SPECIES_COUNTS_API, params)
-        batch = payload.get("results", [])
-        total = int(payload.get("total_results", 0) or 0)
-        rows.extend({
+        return request_json(SPECIES_COUNTS_API, params)
+
+    first = fetch_page(1)
+    total = int(first.get("total_results", 0) or 0)
+    page_count = min(math.ceil(total / 500), math.ceil(MAX_FAST_SPECIES / 500))
+    pages = {1: first.get("results", [])}
+    if page_count > 1:
+        with ThreadPoolExecutor(max_workers=min(6, page_count - 1)) as executor:
+            futures = {executor.submit(fetch_page, page): page for page in range(2, page_count + 1)}
+            for future in as_completed(futures):
+                pages[futures[future]] = future.result().get("results", [])
+    raw_rows = [item for page in range(1, page_count + 1) for item in pages.get(page, [])]
+    rows = [{
             "count": int(item.get("count") or 0),
             "taxon": compact_taxon(item.get("taxon")),
-        } for item in batch)
-        if not batch or len(batch) < 500 or len(rows) >= total:
-            break
-        page += 1
+        } for item in raw_rows]
     return rows[:MAX_FAST_SPECIES], total, total > MAX_FAST_SPECIES
 
 
@@ -320,6 +324,43 @@ def fetch_taxa_by_ids(ids_tuple, locale="nl"):
     result = {}
     if batches:
         with ThreadPoolExecutor(max_workers=min(6, len(batches))) as executor:
+            for future in as_completed([executor.submit(fetch_batch, batch) for batch in batches]):
+                result.update(future.result())
+    return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_leaf_taxonomy(ids_tuple, locale="nl"):
+    """Fetch leaf taxa; each response already carries its complete ancestors."""
+    ids = sorted({int(x) for x in ids_tuple if x})
+    batches = [ids[i:i + 30] for i in range(0, len(ids), 30)]
+
+    def add_record(target, taxon):
+        if not taxon or not taxon.get("id"):
+            return
+        target[int(taxon["id"])] = {
+            "id": int(taxon["id"]),
+            "rank": taxon.get("rank"),
+            "name": taxon.get("name"),
+            "preferred_common_name": taxon.get("preferred_common_name"),
+            "photo": compact_photo(taxon.get("default_photo")),
+        }
+
+    def fetch_batch(batch):
+        payload = request_json(
+            f"{TAXA_API}/" + ",".join(str(x) for x in batch),
+            {"per_page": len(batch), "locale": locale, "preferred_place_id": 7506},
+        )
+        out = {}
+        for taxon in payload.get("results", []):
+            add_record(out, taxon)
+            for ancestor in taxon.get("ancestors") or []:
+                add_record(out, ancestor)
+        return out
+
+    result = {}
+    if batches:
+        with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
             for future in as_completed([executor.submit(fetch_batch, batch) for batch in batches]):
                 result.update(future.result())
     return result
@@ -402,12 +443,12 @@ def build_area_species(observations, geometry):
 
 def build_fast_area_species(count_rows):
     """Turn the API's aggregated leaf taxa into one row per species."""
-    ancestor_ids = {
-        int(tid)
+    leaf_ids = {
+        int(item["taxon"]["id"])
         for item in count_rows
-        for tid in (item.get("taxon", {}).get("ancestor_ids") or [])
+        if item.get("taxon", {}).get("id")
     }
-    lookup = fetch_taxa_by_ids(tuple(sorted(ancestor_ids)))
+    lookup = fetch_leaf_taxonomy(tuple(sorted(leaf_ids)))
     grouped = {}
     for item in count_rows:
         taxon = item.get("taxon") or {}
@@ -458,33 +499,35 @@ def fetch_personal_lifelist(username):
     if not username:
         return {}, set(), 0
 
-    rows, page = [], 1
-    while True:
-        payload = request_json(SPECIES_COUNTS_API, {
+    def fetch_page(page):
+        return request_json(SPECIES_COUNTS_API, {
             "user_id": username,
             "per_page": 500,
             "page": page,
             "locale": "nl",
             "preferred_place_id": 7506,
         })
-        batch = payload.get("results", [])
-        rows.extend(batch)
-        total = int(payload.get("total_results", 0) or 0)
-        if not batch or len(batch) < 500 or page * 500 >= total:
-            break
-        page += 1
-        time.sleep(0.25)
+
+    first = fetch_page(1)
+    total = int(first.get("total_results", 0) or 0)
+    page_count = max(1, math.ceil(total / 500))
+    pages = {1: first.get("results", [])}
+    if page_count > 1:
+        with ThreadPoolExecutor(max_workers=min(8, page_count - 1)) as executor:
+            futures = {executor.submit(fetch_page, page): page for page in range(2, page_count + 1)}
+            for future in as_completed(futures):
+                pages[futures[future]] = future.result().get("results", [])
+    rows = [item for page in range(1, page_count + 1) for item in pages.get(page, [])]
 
     compact = [(compact_taxon(item.get("taxon")), int(item.get("count") or 0)) for item in rows]
     # Exact species need no extra taxonomy request. Only lower-rank leaf taxa
     # (subspecies, varieties, etc.) need their ancestry resolved back to species.
-    lower_rank_ancestor_ids = {
-        tid
+    lower_rank_leaf_ids = {
+        int(taxon["id"])
         for taxon, _ in compact
-        if taxon.get("rank") != "species"
-        for tid in (taxon.get("ancestor_ids") or [])
+        if taxon.get("rank") != "species" and taxon.get("id")
     }
-    lookup = fetch_taxa_by_ids(tuple(sorted(lower_rank_ancestor_ids)))
+    lookup = fetch_leaf_taxonomy(tuple(sorted(lower_rank_leaf_ids)))
     counts = {}
     lineage_ids = set()
     for taxon, count in compact:
@@ -577,7 +620,7 @@ def show_species_grid(frame, include_personal=False, key="species"):
 
 init_state()
 
-st.markdown('<span class="release-badge">Versie 1.1 · snel zoeken en fotoraster</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.2 · versnelde verkenning</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -712,12 +755,13 @@ with years_col:
         "Jaren", 2008, current_year, (max(2008, current_year - 9), current_year)
     )
 
-selected_months = st.multiselect(
-    "Maanden van het jaar",
-    options=list(MONTHS),
-    default=list(MONTHS),
-    format_func=lambda month: MONTHS[month].capitalize(),
-)
+st.markdown("**Maanden van het jaar**")
+month_columns = st.columns(4)
+selected_months = []
+for month, label in MONTHS.items():
+    with month_columns[(month - 1) % 4]:
+        if st.checkbox(label.capitalize(), value=True, key=f"month_{month}"):
+            selected_months.append(month)
 quality_label = st.selectbox(
     "Kwaliteit van de waarnemingen",
     ["Research Grade en Needs ID", "Alle kwaliteitsniveaus", "Alleen Research Grade"],
@@ -727,16 +771,6 @@ quality_value = {
     "Alle kwaliteitsniveaus": "",
     "Alleen Research Grade": "research",
 }[quality_label]
-calculation_mode = st.radio(
-    "Berekening",
-    ["Snel (aanbevolen)", "Exact binnen getekende grens"],
-    horizontal=True,
-    help=(
-        "De snelle stand gebruikt de kleinste rechthoek om het gebied en haalt direct "
-        "soortaantallen op. De exacte stand controleert iedere losse waarneming en kan "
-        "bij grote of druk bezochte gebieden veel langer duren."
-    ),
-)
 
 active_area = st.session_state.active_area
 can_explore = bool(active_area and active_area in st.session_state.areas and selected_months)
@@ -761,25 +795,12 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
 
     api_total, truncated = 0, False
     with st.status("Gebiedssoorten verzamelen…", expanded=True) as status:
-        if calculation_mode.startswith("Snel"):
-            st.write("Geaggregeerde soorten en aantallen ophalen…")
-            count_rows, api_total, truncated = fetch_area_species_counts(
-                tuple(sorted(base_params.items())), (south, west, north, east)
-            )
-            st.write(f"Taxonomie en foto's van {len(count_rows):,} gevonden taxa verwerken…")
-            area_frame, observation_total = build_fast_area_species(count_rows)
-        else:
-            st.write("Losse waarnemingen ophalen…")
-            observations, api_total, truncated = fetch_observation_tile(
-                tuple(sorted(base_params.items())), (south, west, north, east), 0
-            )
-            unique_observations = {
-                int(row["id"]): row for row in observations if row.get("id") is not None
-            }
-            st.write("Waarnemingen exact binnen de getekende grens controleren…")
-            area_frame, observation_total = build_area_species(
-                list(unique_observations.values()), geometry
-            )
+        st.write("Geaggregeerde soorten en aantallen ophalen…")
+        count_rows, api_total, truncated = fetch_area_species_counts(
+            tuple(sorted(base_params.items())), (south, west, north, east)
+        )
+        st.write(f"Taxonomie en foto's van {len(count_rows):,} gevonden taxa verwerken…")
+        area_frame, observation_total = build_fast_area_species(count_rows)
 
         personal_counts, personal_families, personal_species = {}, set(), 0
         if username:
@@ -802,7 +823,6 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "observation_total": observation_total,
             "truncated": truncated,
             "personal_species": personal_species,
-            "calculation_mode": calculation_mode,
         }
         status.update(label="Verkenning gereed", state="complete")
 
@@ -850,17 +870,14 @@ if frame is not None:
             "De veiligheidsgrens voor een zeer soortenrijk gebied is bereikt. De meest "
             "waargenomen soorten staan erin, maar zeldzamere soorten kunnen ontbreken."
         )
-    if str(meta.get("calculation_mode", "")).startswith("Snel"):
-        area_note = "binnen de kleinste rechthoek om het gekozen gebied"
-    else:
-        area_note = "exact binnen de getekende grens"
     st.caption(
-        f"Gebaseerd op {meta.get('observation_total', 0):,} waarnemingen {area_note} in "
+        f"Gebaseerd op {meta.get('observation_total', 0):,} waarnemingen binnen de "
+        "kleinste rechthoek om het gekozen gebied in "
         f"{meta.get('years', ('?', '?'))[0]}–{meta.get('years', ('?', '?'))[1]}. "
         "Historische waarnemingen geven een kansbeeld, geen garantie dat een soort aanwezig is."
     )
 
-    st.subheader("Kies een of meer overzichten")
+    st.subheader("Kies een overzicht")
     overview_options = [
         "Welke soorten kan ik zien?",
         "Welke soorten heb ik zelf nog nooit gezien?",
@@ -868,30 +885,33 @@ if frame is not None:
         "Verdeling van de waarnemingen",
         "Soorten uit families die voor mij volledig nieuw zijn",
     ]
-    overviews = st.multiselect(
-        "Overzichten", overview_options, default=[overview_options[0]], label_visibility="collapsed"
+    overview = st.radio(
+        "Overzicht",
+        overview_options,
+        index=0,
+        label_visibility="collapsed",
     )
 
-    if overview_options[0] in overviews:
+    if overview == overview_options[0]:
         st.markdown("### Welke soorten kan ik zien?")
         st.caption("Meeste waarnemingen in het gekozen gebied en de gekozen maanden eerst.")
         show_species_grid(filtered, key="soorten_in_gebied")
 
-    if overview_options[1] in overviews:
+    elif overview == overview_options[1]:
         st.markdown("### Welke soorten heb ik zelf nog nooit gezien?")
         if not meta.get("username"):
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
         else:
             show_species_grid(unseen, key="nog_nooit_gezien")
 
-    if overview_options[2] in overviews:
+    elif overview == overview_options[2]:
         st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
         if not meta.get("username"):
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
         else:
             show_species_grid(filtered, include_personal=True, key="mijn_ervaring_per_soort")
 
-    if overview_options[3] in overviews:
+    elif overview == overview_options[3]:
         st.markdown("### Verdeling van de waarnemingen")
         chart_a, chart_b = st.columns(2)
         with chart_a:
@@ -918,7 +938,7 @@ if frame is not None:
                         width="stretch",
                     )
 
-    if overview_options[4] in overviews:
+    elif overview == overview_options[4]:
         st.markdown("### Soorten uit families die voor mij volledig nieuw zijn")
         if not meta.get("username"):
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
@@ -932,6 +952,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.1 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.2 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
