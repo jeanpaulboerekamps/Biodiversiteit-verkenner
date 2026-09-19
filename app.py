@@ -84,6 +84,7 @@ div.stButton > button, div.stDownloadButton > button {
   gap:1rem;margin:.75rem 0 1rem}
 .species-card {min-width:0;border:1px solid rgba(49,63,72,.18);border-radius:14px;
   overflow:hidden;background:var(--secondary-background-color);box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.species-card.unseen {border:3px solid #e53935;box-shadow:0 2px 10px rgba(229,57,53,.24)}
 .species-card a {color:inherit;text-decoration:none}
 .species-photo {display:block;width:100%;height:178px;object-fit:cover;background:#e5e7e9}
 .species-photo-empty {height:178px;display:flex;align-items:center;justify-content:center;
@@ -95,7 +96,6 @@ div.stButton > button, div.stDownloadButton > button {
 .species-stats {display:flex;gap:.45rem;flex-wrap:wrap;margin-bottom:.55rem}
 .species-pill {font-size:.78rem;padding:.2rem .45rem;border-radius:999px;
   background:rgba(33,150,243,.12)}
-.species-taxonomy {font-size:.78rem;line-height:1.35;opacity:.72}
 [data-testid="stFileUploaderDropzone"] {padding:.15rem 0;border:0;background:transparent}
 [data-testid="stFileUploaderDropzoneInstructions"] {display:none}
 [data-testid="stFileUploaderDropzone"] button {font-size:0;min-height:46px}
@@ -105,7 +105,7 @@ div.stButton > button, div.stDownloadButton > button {
 @media (max-width:768px){.block-container{padding-left:.8rem;padding-right:.8rem}}
 @media (max-width:540px){.species-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}
   .species-photo,.species-photo-empty{height:132px}.species-body{padding:.65rem}
-  .species-name{font-size:.95rem}.species-taxonomy{display:none}}
+  .species-name{font-size:.95rem}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -655,7 +655,7 @@ def pie_frame(frame, max_slices=14):
     return grouped.rename_axis("Soort").reset_index(name="Waarnemingen")
 
 
-def show_species_grid(frame, include_personal=False, key="species"):
+def show_species_grid(frame, include_personal=False, highlight_unseen=False, key="species"):
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
@@ -674,10 +674,9 @@ def show_species_grid(frame, include_personal=False, key="species"):
         scientific = html.escape(str(row.get("Wetenschappelijke naam") or ""))
         photo_url = html.escape(str(row.get("Foto") or ""), quote=True)
         taxon_url = html.escape(str(row.get("iNaturalist") or "#"), quote=True)
-        family = html.escape(str(row.get("Familie") or "Onbekend"))
-        order = html.escape(str(row.get("Orde") or "Onbekend"))
         observations = int(row.get("Waarnemingen in gebied") or 0)
         personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
+        card_class = "species-card unseen" if highlight_unseen and personal == 0 else "species-card"
         photo = (
             f'<img class="species-photo" src="{photo_url}" alt="{name}" loading="lazy">'
             if photo_url else '<div class="species-photo-empty">🌿</div>'
@@ -687,7 +686,7 @@ def show_species_grid(frame, include_personal=False, key="species"):
             if include_personal else ""
         )
         cards.append(
-            '<article class="species-card">'
+            f'<article class="{card_class}">'
             f'<a href="{taxon_url}" target="_blank" rel="noopener">{photo}'
             '<div class="species-body">'
             f'<div class="species-name">{name}</div>'
@@ -695,7 +694,6 @@ def show_species_grid(frame, include_personal=False, key="species"):
             '<div class="species-stats">'
             f'<span class="species-pill">{observations:,} in gebied</span>{personal_pill}'
             '</div>'
-            f'<div class="species-taxonomy">{family}<br>{order}</div>'
             '</div></a></article>'
         )
     st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
@@ -716,7 +714,7 @@ def show_species_grid(frame, include_personal=False, key="species"):
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.3 · direct resultaat en gebiedsherstel</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.4 · persoonlijke kaarten</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -972,9 +970,8 @@ if frame is not None:
 
     st.subheader("Kies een overzicht")
     overview_options = [
-        "Welke soorten kan ik zien?",
-        "Welke soorten heb ik zelf nog nooit gezien?",
         "Gebiedssoorten met mijn totale aantal waarnemingen",
+        "Welke soorten heb ik zelf nog nooit gezien?",
         "Verdeling van de waarnemingen",
         "Soorten uit families die voor mij volledig nieuw zijn",
     ]
@@ -985,7 +982,7 @@ if frame is not None:
         label_visibility="collapsed",
     )
 
-    personal_overviews = {overview_options[1], overview_options[2], overview_options[3], overview_options[4]}
+    personal_overviews = set(overview_options)
     personal_ready = False
     if overview in personal_overviews and username:
         if st.session_state.personal_loaded_for != username:
@@ -1006,7 +1003,7 @@ if frame is not None:
     unseen = filtered[~filtered["species_id"].isin(personal_counts)].copy()
     new_family = pd.DataFrame(columns=filtered.columns)
 
-    if overview == overview_options[4] and personal_ready:
+    if overview == overview_options[3] and personal_ready:
         if st.session_state.area_taxonomy_frame is None:
             with st.status("Families bepalen…", expanded=True) as family_status:
                 st.write("Alleen voor dit overzicht families en ordes ophalen…")
@@ -1029,13 +1026,21 @@ if frame is not None:
     metric_c.metric("Nog nooit gezien", len(unseen) if personal_ready else "—")
     metric_d.metric(
         "Nieuwe families",
-        new_family["family_id"].nunique() if overview == overview_options[4] and personal_ready else "—",
+        new_family["family_id"].nunique() if overview == overview_options[3] and personal_ready else "—",
     )
 
     if overview == overview_options[0]:
-        st.markdown("### Welke soorten kan ik zien?")
-        st.caption("Meeste waarnemingen in het gekozen gebied en de gekozen maanden eerst.")
-        show_species_grid(filtered, key="soorten_in_gebied")
+        st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
+        if not username:
+            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
+        else:
+            st.caption("Een rode rand betekent dat je deze soort nog nooit hebt waargenomen.")
+            show_species_grid(
+                filtered,
+                include_personal=True,
+                highlight_unseen=True,
+                key="mijn_ervaring_per_soort",
+            )
 
     elif overview == overview_options[1]:
         st.markdown("### Welke soorten heb ik zelf nog nooit gezien?")
@@ -1045,13 +1050,6 @@ if frame is not None:
             show_species_grid(unseen, key="nog_nooit_gezien")
 
     elif overview == overview_options[2]:
-        st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
-        if not username:
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
-        else:
-            show_species_grid(filtered, include_personal=True, key="mijn_ervaring_per_soort")
-
-    elif overview == overview_options[3]:
         st.markdown("### Verdeling van de waarnemingen")
         chart_a, chart_b = st.columns(2)
         with chart_a:
@@ -1078,7 +1076,7 @@ if frame is not None:
                         width="stretch",
                     )
 
-    elif overview == overview_options[4]:
+    elif overview == overview_options[3]:
         st.markdown("### Soorten uit families die voor mij volledig nieuw zijn")
         if not username:
             st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
@@ -1092,6 +1090,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.3 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.4 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
