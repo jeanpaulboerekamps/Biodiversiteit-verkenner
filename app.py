@@ -16,6 +16,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from folium.plugins import Draw
 from shapely.geometry import Point, shape
 from streamlit_folium import st_folium
@@ -124,6 +125,7 @@ def init_state():
         "personal_loaded_for": None,
         "area_taxonomy_frame": None,
         "taxon_candidates": [],
+        "focus_username": True,
         "explore_meta": {},
         "last_area_upload": None,
     }
@@ -169,6 +171,32 @@ def restore_remembered_area():
         st.session_state.active_area = name
     except Exception:
         pass
+
+
+def focus_username_once():
+    if not st.session_state.focus_username:
+        return
+    components.html(
+        """
+        <script>
+        let attempts = 0;
+        const timer = setInterval(() => {
+          attempts += 1;
+          try {
+            const input = [...window.parent.document.querySelectorAll('input')]
+              .find(el => el.getAttribute('aria-label') === 'Openbare iNaturalist-gebruikersnaam');
+            if (input) {
+              input.focus();
+              clearInterval(timer);
+            }
+          } catch (e) { clearInterval(timer); }
+          if (attempts > 20) clearInterval(timer);
+        }, 100);
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state.focus_username = False
 
 
 def area_geojson(name, geometry):
@@ -589,19 +617,24 @@ def enrich_area_taxonomy(frame_json):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_personal_lifelist(username):
+def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
     username = (username or "").strip()
     if not username:
         return {}, set(), 0
 
     def fetch_page(page):
-        return request_json(SPECIES_COUNTS_API, {
+        params = {
             "user_id": username,
             "per_page": 500,
             "page": page,
             "locale": "nl",
             "preferred_place_id": 7506,
-        })
+        }
+        if iconic_taxa:
+            params["iconic_taxa"] = iconic_taxa
+        if taxon_id:
+            params["taxon_id"] = int(taxon_id)
+        return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
     total = int(first.get("total_results", 0) or 0)
@@ -714,7 +747,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.4 · persoonlijke kaarten</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.5 · gerichte persoonlijke vergelijking</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -851,14 +884,17 @@ with years_col:
     year_range = st.slider(
         "Jaren", 2008, current_year, (max(2008, current_year - 9), current_year)
     )
+focus_username_once()
 
 st.markdown("**Maanden van het jaar**")
 month_columns = st.columns(4)
 selected_months = []
 for month, label in MONTHS.items():
     with month_columns[(month - 1) % 4]:
-        if st.checkbox(label.capitalize(), value=True, key=f"month_{month}"):
+        if st.checkbox(label.capitalize(), value=False, key=f"month_{month}"):
             selected_months.append(month)
+if not selected_months:
+    st.caption("Kies minimaal één maand om het gebied te kunnen verkennen.")
 quality_label = st.selectbox(
     "Kwaliteit van de waarnemingen",
     ["Research Grade en Needs ID", "Alle kwaliteitsniveaus", "Alleen Research Grade"],
@@ -945,6 +981,8 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "personal_species": 0,
             "group_label": group_label,
             "selected_taxon": selected_taxon,
+            "iconic_taxa": SPECIES_GROUPS[group_label],
+            "taxon_id": int(selected_taxon["id"]) if selected_taxon else None,
         }
         status.update(label="Verkenning gereed", state="complete")
 
@@ -985,16 +1023,22 @@ if frame is not None:
     personal_overviews = set(overview_options)
     personal_ready = False
     if overview in personal_overviews and username:
-        if st.session_state.personal_loaded_for != username:
+        personal_filter_key = (username, meta.get("iconic_taxa") or "", meta.get("taxon_id"))
+        if st.session_state.personal_loaded_for != personal_filter_key:
             with st.status("Persoonlijke vergelijking laden…", expanded=True) as personal_status:
-                st.write("Jouw openbare iNaturalist-soortenlijst ophalen…")
-                counts, lineage_ids, personal_species = fetch_personal_lifelist(username)
+                filter_text = chosen_group if chosen_group and chosen_group != "Alle soortgroepen" else "alle soortgroepen"
+                st.write(f"Jouw openbare iNaturalist-soortenlijst voor {filter_text} ophalen…")
+                counts, lineage_ids, personal_species = fetch_personal_lifelist(
+                    username,
+                    meta.get("iconic_taxa") or "",
+                    meta.get("taxon_id"),
+                )
                 st.session_state.personal_counts = counts
                 st.session_state.personal_lineage_ids = lineage_ids
-                st.session_state.personal_loaded_for = username
+                st.session_state.personal_loaded_for = personal_filter_key
                 st.session_state.explore_meta["personal_species"] = personal_species
                 personal_status.update(label="Persoonlijke vergelijking gereed", state="complete")
-        personal_ready = st.session_state.personal_loaded_for == username
+        personal_ready = st.session_state.personal_loaded_for == personal_filter_key
 
     personal_counts = st.session_state.personal_counts if personal_ready else {}
     filtered["Mijn waarnemingen wereldwijd"] = (
@@ -1090,6 +1134,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.4 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.5 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )

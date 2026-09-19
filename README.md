@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.4
+# Biodiversiteit Verkenner 1.5
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -15,6 +15,8 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Snelle berekening met geaggregeerde soortaantallen en parallel opgehaalde
   taxonomie en persoonlijke soortenpagina's.
 - Maanden kiezen met afzonderlijke ronde meerkeuzevakjes.
+- De maanden beginnen leeg, zodat bewust minimaal één maand wordt gekozen.
+- De cursor staat bij een nieuwe sessie direct in het gebruikersnaamveld.
 - Eén permanent uitgeklapt keuzemenu voor vier overzichten, met het
   persoonlijke soortenoverzicht bovenaan.
 - Soorten die de gebruiker nog nooit zag krijgen in het persoonlijke
@@ -24,6 +26,8 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   Streamlit-sessie na inactiviteit opnieuw start.
 - Persoonlijke vergelijking en volledige familietaxonomie pas laden wanneer
   het gekozen overzicht die gegevens daadwerkelijk nodig heeft.
+- De persoonlijke soortenlijst met hetzelfde vooraf gekozen soortgroep-,
+  orde- of familiefilter ophalen als de gebiedsverkenning.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
 - Taartdiagrammen maken voor alle soorten en nog nooit geziene soorten.
