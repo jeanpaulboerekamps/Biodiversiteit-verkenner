@@ -1,12 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+import base64
 import html
+from io import StringIO
 import json
 import logging
 import math
 import sys
 import threading
 import time
+import zlib
 
 import folium
 import pandas as pd
@@ -21,10 +24,24 @@ from streamlit_folium import st_folium
 OBS_API = "https://api.inaturalist.org/v1/observations"
 SPECIES_COUNTS_API = "https://api.inaturalist.org/v1/observations/species_counts"
 TAXA_API = "https://api.inaturalist.org/v1/taxa"
+TAXA_AUTOCOMPLETE_API = "https://api.inaturalist.org/v1/taxa/autocomplete"
 MONTHS = {
     1: "januari", 2: "februari", 3: "maart", 4: "april",
     5: "mei", 6: "juni", 7: "juli", 8: "augustus",
     9: "september", 10: "oktober", 11: "november", 12: "december",
+}
+SPECIES_GROUPS = {
+    "Alle soortgroepen": "",
+    "Vogels": "Aves",
+    "Zoogdieren": "Mammalia",
+    "Vissen": "Actinopterygii",
+    "Reptielen": "Reptilia",
+    "Amfibieën": "Amphibia",
+    "Insecten": "Insecta",
+    "Spinachtigen": "Arachnida",
+    "Weekdieren": "Mollusca",
+    "Planten": "Plantae",
+    "Schimmels": "Fungi",
 }
 
 logging.basicConfig(
@@ -103,6 +120,10 @@ def init_state():
         "area_species": None,
         "personal_counts": {},
         "personal_families": set(),
+        "personal_lineage_ids": set(),
+        "personal_loaded_for": None,
+        "area_taxonomy_frame": None,
+        "taxon_candidates": [],
         "explore_meta": {},
         "last_area_upload": None,
     }
@@ -115,7 +136,39 @@ def clear_results():
     st.session_state.area_species = None
     st.session_state.personal_counts = {}
     st.session_state.personal_families = set()
+    st.session_state.personal_lineage_ids = set()
+    st.session_state.personal_loaded_for = None
+    st.session_state.area_taxonomy_frame = None
     st.session_state.explore_meta = {}
+
+
+def remember_area(name, geometry):
+    """Keep the active area in the URL so it survives a sleeping app session."""
+    try:
+        payload = json.dumps({"name": name, "geometry": geometry}, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(zlib.compress(payload.encode("utf-8"), 9)).decode().rstrip("=")
+        st.query_params["gebied"] = token
+    except Exception:
+        pass
+
+
+def restore_remembered_area():
+    if st.session_state.areas:
+        return
+    token = st.query_params.get("gebied")
+    if not token:
+        return
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(padded)).decode("utf-8"))
+        name, geometry = str(payload["name"]), payload["geometry"]
+        restored = shape(geometry)
+        if restored.is_empty or not restored.is_valid:
+            return
+        st.session_state.areas[name] = geometry
+        st.session_state.active_area = name
+    except Exception:
+        pass
 
 
 def area_geojson(name, geometry):
@@ -207,6 +260,32 @@ def compact_observation(observation):
         "taxon": compact_taxon(observation.get("taxon")),
         "photo": compact_photo(photos[0]) if photos else "",
     }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def search_orders_and_families(query):
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+    payload = request_json(TAXA_AUTOCOMPLETE_API, {
+        "q": query,
+        "per_page": 30,
+        "locale": "nl",
+        "preferred_place_id": 7506,
+    })
+    results = []
+    for taxon in payload.get("results", []):
+        if taxon.get("rank") not in {"order", "family"} or not taxon.get("id"):
+            continue
+        scientific = taxon.get("name") or ""
+        common = taxon.get("preferred_common_name") or ""
+        title = f"{common} ({scientific})" if common and common != scientific else scientific
+        results.append({
+            "id": int(taxon["id"]),
+            "rank": taxon.get("rank"),
+            "label": title,
+        })
+    return results
 
 
 def split_bbox(bbox):
@@ -344,6 +423,9 @@ def fetch_leaf_taxonomy(ids_tuple, locale="nl"):
             "name": taxon.get("name"),
             "preferred_common_name": taxon.get("preferred_common_name"),
             "photo": compact_photo(taxon.get("default_photo")),
+            "ancestor_ids": [
+                int(x) for x in (taxon.get("ancestor_ids") or []) if str(x).isdigit()
+            ] + [int(taxon["id"])],
         }
 
     def fetch_batch(batch):
@@ -441,41 +523,33 @@ def build_area_species(observations, geometry):
     ).reset_index(drop=True), len(inside)
 
 
-def build_fast_area_species(count_rows):
-    """Turn the API's aggregated leaf taxa into one row per species."""
-    leaf_ids = {
-        int(item["taxon"]["id"])
-        for item in count_rows
-        if item.get("taxon", {}).get("id")
-    }
-    lookup = fetch_leaf_taxonomy(tuple(sorted(leaf_ids)))
+def build_fast_area_species(count_rows, group_label=""):
+    """Build cards without extra API calls; skip leaves not resolved to species."""
     grouped = {}
     for item in count_rows:
         taxon = item.get("taxon") or {}
-        species_id = (
-            int(taxon["id"])
-            if taxon.get("rank") == "species" and taxon.get("id")
-            else rank_id(taxon, lookup, "species")
-        )
+        rank = taxon.get("rank")
+        ancestor_ids = taxon.get("ancestor_ids") or []
+        if rank == "species" and taxon.get("id"):
+            species_id = int(taxon["id"])
+        elif rank in {"subspecies", "variety", "form"} and len(ancestor_ids) >= 2:
+            species_id = int(ancestor_ids[-2])
+        else:
+            species_id = None
         if not species_id:
             continue
-        species = lookup.get(species_id, {})
-        family_id = rank_id(taxon, lookup, "family")
-        order_id = rank_id(taxon, lookup, "order")
-        family_nl, family_scientific = rank_names(family_id, lookup)
-        order_nl, order_scientific = rank_names(order_id, lookup)
         row = grouped.setdefault(species_id, {
             "species_id": species_id,
-            "Nederlandse naam": taxon.get("preferred_common_name") or species.get("preferred_common_name") or taxon.get("name"),
-            "Wetenschappelijke naam": species.get("name") or taxon.get("name"),
+            "Nederlandse naam": taxon.get("preferred_common_name") or taxon.get("name"),
+            "Wetenschappelijke naam": taxon.get("name"),
             "Waarnemingen in gebied": 0,
-            "Familie": family_nl or family_scientific or "Onbekend",
-            "Familie wetenschappelijk": family_scientific or "Onbekend",
-            "family_id": family_id,
-            "Orde": order_nl or order_scientific or "Onbekend",
-            "Orde wetenschappelijk": order_scientific or "Onbekend",
-            "order_id": order_id,
-            "Foto": taxon.get("photo") or species.get("photo") or "",
+            "Familie": "",
+            "Familie wetenschappelijk": "",
+            "family_id": None,
+            "Orde": group_label,
+            "Orde wetenschappelijk": group_label,
+            "order_id": None,
+            "Foto": taxon.get("photo") or "",
             "iNaturalist": f"https://www.inaturalist.org/taxa/{species_id}",
         })
         row["Waarnemingen in gebied"] += int(item.get("count") or 0)
@@ -491,6 +565,27 @@ def build_fast_area_species(count_rows):
     return frame.sort_values(
         ["Waarnemingen in gebied", "Nederlandse naam"], ascending=[False, True]
     ).reset_index(drop=True), total_observations
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def enrich_area_taxonomy(frame_json):
+    """Resolve family and order only for the overview that actually needs them."""
+    frame = pd.read_json(StringIO(frame_json), orient="split")
+    lookup = fetch_leaf_taxonomy(tuple(sorted(int(x) for x in frame["species_id"].tolist())))
+    for index, row in frame.iterrows():
+        species_id = int(row["species_id"])
+        taxon = lookup.get(species_id, {})
+        family_id = rank_id(taxon, lookup, "family")
+        order_id = rank_id(taxon, lookup, "order")
+        family_nl, family_scientific = rank_names(family_id, lookup)
+        order_nl, order_scientific = rank_names(order_id, lookup)
+        frame.at[index, "family_id"] = family_id
+        frame.at[index, "Familie"] = family_nl or family_scientific or "Onbekend"
+        frame.at[index, "Familie wetenschappelijk"] = family_scientific or "Onbekend"
+        frame.at[index, "order_id"] = order_id
+        frame.at[index, "Orde"] = order_nl or order_scientific or "Onbekend"
+        frame.at[index, "Orde wetenschappelijk"] = order_scientific or "Onbekend"
+    return frame
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -619,8 +714,9 @@ def show_species_grid(frame, include_personal=False, key="species"):
 
 
 init_state()
+restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.2 · versnelde verkenning</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.3 · direct resultaat en gebiedsherstel</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -664,6 +760,7 @@ if uploaded is not None:
             else:
                 st.session_state.active_area = imported[0]
                 st.session_state.last_area_upload = upload_key
+                remember_area(imported[0], st.session_state.areas[imported[0]])
                 clear_results()
                 st.rerun()
         except Exception as exc:
@@ -676,6 +773,7 @@ if st.session_state.areas:
         selected_area = st.selectbox("Actief gebied", names, index=names.index(current))
         if selected_area != st.session_state.active_area:
             st.session_state.active_area = selected_area
+            remember_area(selected_area, st.session_state.areas[selected_area])
             clear_results()
             st.rerun()
     else:
@@ -737,6 +835,7 @@ if st.session_state.show_area_creator:
             else:
                 st.session_state.areas[clean_name] = geometry
                 st.session_state.active_area = clean_name
+                remember_area(clean_name, geometry)
                 st.session_state.show_area_creator = False
                 clear_results()
                 st.rerun()
@@ -772,6 +871,30 @@ quality_value = {
     "Alleen Research Grade": "research",
 }[quality_label]
 
+st.markdown("**Soortgroep vóór het verkennen**")
+group_label = st.selectbox("Grote soortgroep", list(SPECIES_GROUPS), label_visibility="collapsed")
+taxon_search_col, taxon_button_col = st.columns([3, 1])
+with taxon_search_col:
+    taxon_query = st.text_input(
+        "Orde of familie zoeken (optioneel)",
+        placeholder="Bijvoorbeeld: Perciformes, Cyprinidae of uilen",
+    )
+with taxon_button_col:
+    st.write("")
+    search_taxon = st.button("Zoeken", key="search_taxon")
+if search_taxon:
+    with st.spinner("Ordes en families zoeken…"):
+        st.session_state.taxon_candidates = search_orders_and_families(taxon_query)
+    if not st.session_state.taxon_candidates:
+        st.warning("Geen orde of familie gevonden. Probeer een wetenschappelijke naam.")
+
+candidate_options = [None] + st.session_state.taxon_candidates
+selected_taxon = st.selectbox(
+    "Gekozen orde of familie",
+    candidate_options,
+    format_func=lambda item: "Geen extra beperking" if item is None else f"{item['label']} · {item['rank']}",
+)
+
 active_area = st.session_state.active_area
 can_explore = bool(active_area and active_area in st.session_state.areas and selected_months)
 if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
@@ -789,6 +912,10 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
     }
     if quality_value:
         base_params["quality_grade"] = quality_value
+    if SPECIES_GROUPS[group_label]:
+        base_params["iconic_taxa"] = SPECIES_GROUPS[group_label]
+    if selected_taxon:
+        base_params["taxon_id"] = int(selected_taxon["id"])
 
     if len(selected_months) < 12:
         base_params["month"] = ",".join(str(month) for month in selected_months)
@@ -799,21 +926,16 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
         count_rows, api_total, truncated = fetch_area_species_counts(
             tuple(sorted(base_params.items())), (south, west, north, east)
         )
-        st.write(f"Taxonomie en foto's van {len(count_rows):,} gevonden taxa verwerken…")
-        area_frame, observation_total = build_fast_area_species(count_rows)
-
-        personal_counts, personal_families, personal_species = {}, set(), 0
-        if username:
-            st.write("Jouw wereldwijde soortenlijst ophalen…")
-            personal_counts, personal_lineage_ids, personal_species = fetch_personal_lifelist(username)
-            area_family_ids = {
-                int(x) for x in area_frame["family_id"].dropna().tolist()
-            }
-            personal_families = area_family_ids.intersection(personal_lineage_ids)
+        st.write(f"Fotokaarten van {len(count_rows):,} gevonden taxa maken…")
+        context_label = selected_taxon["label"] if selected_taxon else group_label if group_label != "Alle soortgroepen" else ""
+        area_frame, observation_total = build_fast_area_species(count_rows, context_label)
 
         st.session_state.area_species = area_frame
-        st.session_state.personal_counts = personal_counts
-        st.session_state.personal_families = personal_families
+        st.session_state.personal_counts = {}
+        st.session_state.personal_families = set()
+        st.session_state.personal_lineage_ids = set()
+        st.session_state.personal_loaded_for = None
+        st.session_state.area_taxonomy_frame = None
         st.session_state.explore_meta = {
             "area": active_area,
             "username": username,
@@ -822,7 +944,9 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "api_total": api_total,
             "observation_total": observation_total,
             "truncated": truncated,
-            "personal_species": personal_species,
+            "personal_species": 0,
+            "group_label": group_label,
+            "selected_taxon": selected_taxon,
         }
         status.update(label="Verkenning gereed", state="complete")
 
@@ -830,41 +954,7 @@ frame = st.session_state.area_species
 if frame is not None:
     meta = st.session_state.explore_meta
     st.divider()
-    st.subheader("Filters")
-    filter_a, filter_b = st.columns(2)
-    order_options = sorted(x for x in frame["Orde wetenschappelijk"].dropna().unique() if x != "Onbekend")
-    with filter_a:
-        selected_orders = st.multiselect("Orde", order_options)
-    family_source = frame
-    if selected_orders:
-        family_source = family_source[family_source["Orde wetenschappelijk"].isin(selected_orders)]
-    family_options = sorted(x for x in family_source["Familie wetenschappelijk"].dropna().unique() if x != "Onbekend")
-    with filter_b:
-        selected_families = st.multiselect("Familie", family_options)
-
     filtered = frame.copy()
-    if selected_orders:
-        filtered = filtered[filtered["Orde wetenschappelijk"].isin(selected_orders)]
-    if selected_families:
-        filtered = filtered[filtered["Familie wetenschappelijk"].isin(selected_families)]
-
-    personal_counts = st.session_state.personal_counts
-    personal_families = st.session_state.personal_families
-    filtered["Mijn waarnemingen wereldwijd"] = (
-        filtered["species_id"].map(personal_counts).fillna(0).astype(int)
-    )
-    unseen = filtered[~filtered["species_id"].isin(personal_counts)].copy()
-    new_family = filtered[
-        filtered["family_id"].notna()
-        & ~filtered["family_id"].isin(personal_families)
-    ].copy()
-
-    metric_a, metric_b, metric_c, metric_d = st.columns(4)
-    metric_a.metric("Soorten in gebied", len(filtered))
-    metric_b.metric("Waarnemingen", int(filtered["Waarnemingen in gebied"].sum()))
-    metric_c.metric("Nog nooit gezien", len(unseen) if meta.get("username") else "—")
-    metric_d.metric("Nieuwe families", new_family["family_id"].nunique() if meta.get("username") else "—")
-
     if meta.get("truncated"):
         st.warning(
             "De veiligheidsgrens voor een zeer soortenrijk gebied is bereikt. De meest "
@@ -876,6 +966,9 @@ if frame is not None:
         f"{meta.get('years', ('?', '?'))[0]}–{meta.get('years', ('?', '?'))[1]}. "
         "Historische waarnemingen geven een kansbeeld, geen garantie dat een soort aanwezig is."
     )
+    chosen_group = meta.get("selected_taxon", {}).get("label") if meta.get("selected_taxon") else meta.get("group_label")
+    if chosen_group and chosen_group != "Alle soortgroepen":
+        st.info(f"Vooraf geselecteerde soortgroep: **{chosen_group}**")
 
     st.subheader("Kies een overzicht")
     overview_options = [
@@ -892,6 +985,53 @@ if frame is not None:
         label_visibility="collapsed",
     )
 
+    personal_overviews = {overview_options[1], overview_options[2], overview_options[3], overview_options[4]}
+    personal_ready = False
+    if overview in personal_overviews and username:
+        if st.session_state.personal_loaded_for != username:
+            with st.status("Persoonlijke vergelijking laden…", expanded=True) as personal_status:
+                st.write("Jouw openbare iNaturalist-soortenlijst ophalen…")
+                counts, lineage_ids, personal_species = fetch_personal_lifelist(username)
+                st.session_state.personal_counts = counts
+                st.session_state.personal_lineage_ids = lineage_ids
+                st.session_state.personal_loaded_for = username
+                st.session_state.explore_meta["personal_species"] = personal_species
+                personal_status.update(label="Persoonlijke vergelijking gereed", state="complete")
+        personal_ready = st.session_state.personal_loaded_for == username
+
+    personal_counts = st.session_state.personal_counts if personal_ready else {}
+    filtered["Mijn waarnemingen wereldwijd"] = (
+        filtered["species_id"].map(personal_counts).fillna(0).astype(int)
+    )
+    unseen = filtered[~filtered["species_id"].isin(personal_counts)].copy()
+    new_family = pd.DataFrame(columns=filtered.columns)
+
+    if overview == overview_options[4] and personal_ready:
+        if st.session_state.area_taxonomy_frame is None:
+            with st.status("Families bepalen…", expanded=True) as family_status:
+                st.write("Alleen voor dit overzicht families en ordes ophalen…")
+                st.session_state.area_taxonomy_frame = enrich_area_taxonomy(
+                    filtered.to_json(orient="split")
+                )
+                family_status.update(label="Families gereed", state="complete")
+        taxonomy_frame = st.session_state.area_taxonomy_frame.copy()
+        personal_families = {
+            int(x) for x in taxonomy_frame["family_id"].dropna().tolist()
+        }.intersection(st.session_state.personal_lineage_ids)
+        new_family = taxonomy_frame[
+            taxonomy_frame["family_id"].notna()
+            & ~taxonomy_frame["family_id"].isin(personal_families)
+        ].copy()
+
+    metric_a, metric_b, metric_c, metric_d = st.columns(4)
+    metric_a.metric("Soorten in gebied", len(filtered))
+    metric_b.metric("Waarnemingen", int(filtered["Waarnemingen in gebied"].sum()))
+    metric_c.metric("Nog nooit gezien", len(unseen) if personal_ready else "—")
+    metric_d.metric(
+        "Nieuwe families",
+        new_family["family_id"].nunique() if overview == overview_options[4] and personal_ready else "—",
+    )
+
     if overview == overview_options[0]:
         st.markdown("### Welke soorten kan ik zien?")
         st.caption("Meeste waarnemingen in het gekozen gebied en de gekozen maanden eerst.")
@@ -899,15 +1039,15 @@ if frame is not None:
 
     elif overview == overview_options[1]:
         st.markdown("### Welke soorten heb ik zelf nog nooit gezien?")
-        if not meta.get("username"):
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
+        if not username:
+            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
         else:
             show_species_grid(unseen, key="nog_nooit_gezien")
 
     elif overview == overview_options[2]:
         st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
-        if not meta.get("username"):
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
+        if not username:
+            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
         else:
             show_species_grid(filtered, include_personal=True, key="mijn_ervaring_per_soort")
 
@@ -926,7 +1066,7 @@ if frame is not None:
                 )
         with chart_b:
             st.markdown("**Soorten die ik nog nooit heb gezien**")
-            if not meta.get("username"):
+            if not username:
                 st.info("Vul eerst je iNaturalist-gebruikersnaam in.")
             else:
                 pie_unseen = pie_frame(unseen)
@@ -940,8 +1080,8 @@ if frame is not None:
 
     elif overview == overview_options[4]:
         st.markdown("### Soorten uit families die voor mij volledig nieuw zijn")
-        if not meta.get("username"):
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in en start de verkenning opnieuw.")
+        if not username:
+            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
         elif new_family.empty:
             st.success("Binnen deze filters zijn geen volledig nieuwe families gevonden.")
         else:
@@ -952,6 +1092,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.2 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.3 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
