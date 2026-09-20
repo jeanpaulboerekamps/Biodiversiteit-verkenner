@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.7
+# Biodiversiteit Verkenner 1.8
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -32,6 +32,10 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   het gekozen overzicht die gegevens daadwerkelijk nodig heeft.
 - De persoonlijke soortenlijst met hetzelfde vooraf gekozen soortgroep-,
   orde- of familiefilter ophalen als de gebiedsverkenning.
+- Grote soortgroepen met hun vaste iNaturalist-taxonnummer opvragen. Daardoor
+  gebruikt bijvoorbeeld de vissenkeuze zowel voor het gebied als voor de
+  persoonlijke vergelijking exact taxon 47178 en kan een tekstfilter niet
+  onbedoeld een lege uitkomst veroorzaken.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
 - Taartdiagrammen maken voor alle soorten en nog nooit geziene soorten.

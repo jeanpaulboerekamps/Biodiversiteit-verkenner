@@ -32,17 +32,17 @@ MONTHS = {
     9: "september", 10: "oktober", 11: "november", 12: "december",
 }
 SPECIES_GROUPS = {
-    "Alle soortgroepen": "",
-    "Vogels": "Aves",
-    "Zoogdieren": "Mammalia",
-    "Vissen": "Actinopterygii",
-    "Reptielen": "Reptilia",
-    "Amfibieën": "Amphibia",
-    "Insecten": "Insecta",
-    "Spinachtigen": "Arachnida",
-    "Weekdieren": "Mollusca",
-    "Planten": "Plantae",
-    "Schimmels": "Fungi",
+    "Alle soortgroepen": None,
+    "Vogels": 3,
+    "Zoogdieren": 40151,
+    "Vissen": 47178,
+    "Reptielen": 26036,
+    "Amfibieën": 20978,
+    "Insecten": 47158,
+    "Spinachtigen": 47119,
+    "Weekdieren": 47115,
+    "Planten": 47126,
+    "Schimmels": 47170,
 }
 
 logging.basicConfig(
@@ -218,6 +218,26 @@ def area_geojson(name, geometry):
 def area_filename(name):
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name).strip("_")
     return f"{safe or 'te_verkennen_gebied'}.geojson"
+
+
+def build_explore_params(year_range, selected_months, quality_value, group_label, selected_taxon):
+    params = {
+        "d1": f"{year_range[0]}-01-01",
+        "d2": f"{year_range[1]}-12-31",
+        "geo": "true",
+        "locale": "en",
+        "order_by": "observed_on",
+        "order": "desc",
+    }
+    if quality_value:
+        params["quality_grade"] = quality_value
+    if selected_taxon:
+        params["taxon_id"] = int(selected_taxon["id"])
+    elif SPECIES_GROUPS[group_label]:
+        params["taxon_id"] = int(SPECIES_GROUPS[group_label])
+    if len(selected_months) < 12:
+        params["month"] = ",".join(str(month) for month in selected_months)
+    return params
 
 
 def request_json(url, params, timeout=(10, 45)):
@@ -783,7 +803,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.7 · grote gebieden compleet</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.8 · betrouwbare soortgroepfilters</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -971,23 +991,9 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
     geometry = st.session_state.areas[active_area]
     bounds = shape(geometry).bounds
     west, south, east, north = bounds
-    base_params = {
-        "d1": f"{year_range[0]}-01-01",
-        "d2": f"{year_range[1]}-12-31",
-        "geo": "true",
-        "locale": "en",
-        "order_by": "observed_on",
-        "order": "desc",
-    }
-    if quality_value:
-        base_params["quality_grade"] = quality_value
-    if SPECIES_GROUPS[group_label]:
-        base_params["iconic_taxa"] = SPECIES_GROUPS[group_label]
-    if selected_taxon:
-        base_params["taxon_id"] = int(selected_taxon["id"])
-
-    if len(selected_months) < 12:
-        base_params["month"] = ",".join(str(month) for month in selected_months)
+    base_params = build_explore_params(
+        year_range, selected_months, quality_value, group_label, selected_taxon
+    )
 
     api_total, truncated = 0, False
     with st.status("Gebiedssoorten verzamelen…", expanded=True) as status:
@@ -1016,8 +1022,12 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "personal_species": 0,
             "group_label": group_label,
             "selected_taxon": selected_taxon,
-            "iconic_taxa": SPECIES_GROUPS[group_label],
-            "taxon_id": int(selected_taxon["id"]) if selected_taxon else None,
+            "iconic_taxa": "",
+            "taxon_id": (
+                int(selected_taxon["id"])
+                if selected_taxon
+                else SPECIES_GROUPS[group_label]
+            ),
         }
         status.update(label="Verkenning gereed", state="complete")
 
@@ -1169,6 +1179,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.7 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.8 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
