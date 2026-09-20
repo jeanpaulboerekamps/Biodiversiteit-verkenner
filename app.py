@@ -145,9 +145,38 @@ def clear_results():
     st.session_state.explore_meta = {}
 
 
+def normalize_geometry_longitudes(geometry):
+    """Map wrapped Leaflet longitudes back to the standard -180..180 range."""
+    if not isinstance(geometry, dict):
+        return geometry
+
+    def normalize_coordinates(value):
+        if (
+            isinstance(value, list)
+            and len(value) >= 2
+            and isinstance(value[0], (int, float))
+            and isinstance(value[1], (int, float))
+        ):
+            longitude = ((float(value[0]) + 180.0) % 360.0) - 180.0
+            return [longitude, *value[1:]]
+        if isinstance(value, list):
+            return [normalize_coordinates(item) for item in value]
+        return value
+
+    normalized = dict(geometry)
+    if "coordinates" in normalized:
+        normalized["coordinates"] = normalize_coordinates(normalized["coordinates"])
+    if "geometries" in normalized:
+        normalized["geometries"] = [
+            normalize_geometry_longitudes(item) for item in normalized["geometries"]
+        ]
+    return normalized
+
+
 def remember_area(name, geometry):
     """Keep the active area in the URL so it survives a sleeping app session."""
     try:
+        geometry = normalize_geometry_longitudes(geometry)
         payload = json.dumps({"name": name, "geometry": geometry}, separators=(",", ":"))
         token = base64.urlsafe_b64encode(zlib.compress(payload.encode("utf-8"), 9)).decode().rstrip("=")
         st.query_params["gebied"] = token
@@ -164,7 +193,8 @@ def restore_remembered_area():
     try:
         padded = token + "=" * (-len(token) % 4)
         payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(padded)).decode("utf-8"))
-        name, geometry = str(payload["name"]), payload["geometry"]
+        name = str(payload["name"])
+        geometry = normalize_geometry_longitudes(payload["geometry"])
         restored = shape(geometry)
         if restored.is_empty or not restored.is_valid:
             return
@@ -201,6 +231,7 @@ def focus_username_once():
 
 
 def area_geojson(name, geometry):
+    geometry = normalize_geometry_longitudes(geometry)
     return json.dumps(
         {
             "type": "FeatureCollection",
@@ -803,7 +834,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.8 · betrouwbare soortgroepfilters</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.9 · herstelde wereldcoördinaten</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -836,7 +867,7 @@ if uploaded is not None:
             )
             imported = []
             for number, feature in enumerate(features, 1):
-                geometry = feature.get("geometry")
+                geometry = normalize_geometry_longitudes(feature.get("geometry"))
                 if not geometry:
                     continue
                 name = str((feature.get("properties") or {}).get("name") or f"Gebied {number}").strip()
@@ -900,7 +931,10 @@ if st.session_state.show_area_creator:
             key="explorer_draw_map", returned_objects=["all_drawings"],
         )
         drawings = map_state.get("all_drawings") or []
-        geometry = drawings[-1].get("geometry") if drawings else None
+        geometry = (
+            normalize_geometry_longitudes(drawings[-1].get("geometry"))
+            if drawings else None
+        )
         clean_name = area_name.strip()
         ready = bool(clean_name and geometry)
         use_col, save_col = st.columns(2)
@@ -988,7 +1022,8 @@ selected_taxon = st.selectbox(
 active_area = st.session_state.active_area
 can_explore = bool(active_area and active_area in st.session_state.areas and selected_months)
 if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
-    geometry = st.session_state.areas[active_area]
+    geometry = normalize_geometry_longitudes(st.session_state.areas[active_area])
+    st.session_state.areas[active_area] = geometry
     bounds = shape(geometry).bounds
     west, south, east, north = bounds
     base_params = build_explore_params(
@@ -1179,6 +1214,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.8 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.9 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )

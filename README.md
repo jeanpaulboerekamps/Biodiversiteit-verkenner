@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.8
+# Biodiversiteit Verkenner 1.9
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -36,6 +36,11 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   gebruikt bijvoorbeeld de vissenkeuze zowel voor het gebied als voor de
   persoonlijke vergelijking exact taxon 47178 en kan een tekstfilter niet
   onbedoeld een lege uitkomst veroorzaken.
+- Door verschuiven over een wereldkaart kunnen Leaflet-gebieden lengtegraden
+  buiten -180 tot 180 graden bevatten (bijvoorbeeld -229 graden voor Raja
+  Ampat). De app normaliseert die nu automatisch bij openen, tekenen,
+  herstellen, bewaren en zoeken, zodat zulke gebieden niet langer nul
+  resultaten opleveren.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
 - Taartdiagrammen maken voor alle soorten en nog nooit geziene soorten.
