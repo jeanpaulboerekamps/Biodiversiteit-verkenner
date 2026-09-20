@@ -797,7 +797,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
-    maximum = min(250, len(frame))
+    maximum = len(frame)
     if maximum == 1:
         shown = 1
     else:
@@ -852,7 +852,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.10 · duidelijkere filters</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.11 · volledige soortenrasters</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1263,6 +1263,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.10 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.11 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )

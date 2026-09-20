@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.10
+# Biodiversiteit Verkenner 1.11
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -19,6 +19,8 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Soorten rangschikken op het aantal waarnemingen in het gekozen gebied.
 - Foto, Engelse naam, wetenschappelijke naam en iNaturalist-link tonen in
   een responsief raster.
+- De schuifregelaar voor het soortenraster tot het volledige aantal gevonden
+  soorten laten lopen; de eerdere bovengrens van 250 is verwijderd.
 - Engelse iNaturalist-soortnamen gebruiken zonder Nederlandse plaatsvoorkeur.
 - Snelle berekening met geaggregeerde soortaantallen en parallel opgehaalde
   taxonomie en persoonlijke soortenpagina's.
