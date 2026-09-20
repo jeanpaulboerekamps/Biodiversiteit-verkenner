@@ -38,6 +38,7 @@ SPECIES_GROUPS = {
     "Vissen": 47178,
     "Reptielen": 26036,
     "Amfibieën": 20978,
+    "Vlinders": 47157,
     "Insecten": 47158,
     "Spinachtigen": 47119,
     "Weekdieren": 47115,
@@ -126,6 +127,7 @@ def init_state():
         "personal_loaded_for": None,
         "area_taxonomy_frame": None,
         "taxon_candidates": [],
+        "selected_species_group": "Alle soortgroepen",
         "focus_username": True,
         "explore_meta": {},
         "last_area_upload": None,
@@ -143,6 +145,15 @@ def clear_results():
     st.session_state.personal_loaded_for = None
     st.session_state.area_taxonomy_frame = None
     st.session_state.explore_meta = {}
+
+
+def select_species_group(selected_label):
+    """Keep the checkbox grid single-choice while retaining the month styling."""
+    st.session_state.selected_species_group = selected_label
+    for index, label in enumerate(SPECIES_GROUPS):
+        st.session_state[f"species_group_{index}"] = label == selected_label
+    st.session_state.taxon_candidates = []
+    st.session_state.pop("selected_taxon_option", None)
 
 
 def normalize_geometry_longitudes(geometry):
@@ -347,24 +358,31 @@ def search_orders_and_families(query):
     query = (query or "").strip()
     if len(query) < 2:
         return []
-    payload = request_json(TAXA_AUTOCOMPLETE_API, {
-        "q": query,
-        "per_page": 30,
-        "locale": "en",
-    })
-    results = []
-    for taxon in payload.get("results", []):
-        if taxon.get("rank") not in {"order", "family"} or not taxon.get("id"):
-            continue
-        scientific = taxon.get("name") or ""
-        common = taxon.get("preferred_common_name") or ""
-        title = f"{common} ({scientific})" if common and common != scientific else scientific
-        results.append({
-            "id": int(taxon["id"]),
-            "rank": taxon.get("rank"),
-            "label": title,
+    results_by_id = {}
+    for locale in ("en", "nl"):
+        payload = request_json(TAXA_AUTOCOMPLETE_API, {
+            "q": query,
+            "per_page": 30,
+            "locale": locale,
         })
-    return results
+        for taxon in payload.get("results", []):
+            if taxon.get("rank") not in {"order", "family"} or not taxon.get("id"):
+                continue
+            taxon_id = int(taxon["id"])
+            if taxon_id in results_by_id:
+                continue
+            scientific = taxon.get("name") or ""
+            common = (taxon.get("preferred_common_name") or "") if locale == "en" else ""
+            title = f"{common} ({scientific})" if common and common != scientific else scientific
+            results_by_id[taxon_id] = {
+                "id": taxon_id,
+                "rank": taxon.get("rank"),
+                "label": title,
+            }
+    return sorted(
+        results_by_id.values(),
+        key=lambda item: (0 if item["rank"] == "order" else 1, item["label"].lower()),
+    )
 
 
 def split_bbox(bbox):
@@ -834,7 +852,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.9 · herstelde wereldcoördinaten</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.10 · duidelijkere filters</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -996,28 +1014,59 @@ quality_value = {
 }[quality_label]
 
 st.markdown("**Soortgroep vóór het verkennen**")
-group_label = st.selectbox("Grote soortgroep", list(SPECIES_GROUPS), label_visibility="collapsed")
-taxon_search_col, taxon_button_col = st.columns([3, 1])
-with taxon_search_col:
-    taxon_query = st.text_input(
-        "Orde of familie zoeken (optioneel)",
-        placeholder="Bijvoorbeeld: Perciformes, Cyprinidae of uilen",
-    )
-with taxon_button_col:
-    st.write("")
-    search_taxon = st.button("Zoeken", key="search_taxon")
-if search_taxon:
-    with st.spinner("Ordes en families zoeken…"):
-        st.session_state.taxon_candidates = search_orders_and_families(taxon_query)
-    if not st.session_state.taxon_candidates:
-        st.warning("Geen orde of familie gevonden. Probeer een wetenschappelijke naam.")
+group_label = st.session_state.selected_species_group
+if group_label not in SPECIES_GROUPS:
+    group_label = "Alle soortgroepen"
+    st.session_state.selected_species_group = group_label
+group_columns = st.columns(4)
+for index, label in enumerate(SPECIES_GROUPS):
+    key = f"species_group_{index}"
+    if key not in st.session_state:
+        st.session_state[key] = label == group_label
+    with group_columns[index % 4]:
+        st.checkbox(label, key=key, on_change=select_species_group, args=(label,))
+group_label = st.session_state.selected_species_group
 
-candidate_options = [None] + st.session_state.taxon_candidates
-selected_taxon = st.selectbox(
-    "Gekozen orde of familie",
-    candidate_options,
-    format_func=lambda item: "Geen extra beperking" if item is None else f"{item['label']} · {item['rank']}",
+st.markdown("**Eventueel één specifieke orde of familie kiezen**")
+st.caption(
+    "Zoek op een Nederlandse, Engelse of wetenschappelijke naam. Een gekozen "
+    "orde of familie vervangt de hoofdgroep hierboven."
 )
+with st.form("taxon_search_form", clear_on_submit=False):
+    taxon_search_col, taxon_button_col = st.columns([3, 1])
+    with taxon_search_col:
+        taxon_query = st.text_input(
+            "Orde of familie",
+            placeholder="Bijvoorbeeld: Lepidoptera, vlinders of Cyprinidae",
+            label_visibility="collapsed",
+        )
+    with taxon_button_col:
+        search_taxon = st.form_submit_button("Zoeken", use_container_width=True)
+if search_taxon:
+    st.session_state.pop("selected_taxon_option", None)
+    if len(taxon_query.strip()) < 2:
+        st.session_state.taxon_candidates = []
+        st.warning("Typ minimaal twee tekens om te zoeken.")
+    else:
+        with st.spinner("Ordes en families zoeken…"):
+            st.session_state.taxon_candidates = search_orders_and_families(taxon_query)
+        if not st.session_state.taxon_candidates:
+            st.warning("Geen orde of familie gevonden. Probeer een andere naam.")
+
+selected_taxon = None
+if st.session_state.taxon_candidates:
+    st.success(f"{len(st.session_state.taxon_candidates)} zoekresulta(a)t(en) gevonden.")
+    candidate_options = [None] + st.session_state.taxon_candidates
+    selected_taxon = st.selectbox(
+        "Welke orde of familie wil je gebruiken?",
+        candidate_options,
+        key="selected_taxon_option",
+        format_func=lambda item: (
+            "Geen – gebruik alleen de hoofdgroep"
+            if item is None
+            else f"{item['label']} · {item['rank']}"
+        ),
+    )
 
 active_area = st.session_state.active_area
 can_explore = bool(active_area and active_area in st.session_state.areas and selected_months)
@@ -1214,6 +1263,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.9 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.10 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
