@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.11
+# Biodiversiteit Verkenner 1.12
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -10,6 +10,7 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Vóór de zoekactie filteren op kalendermaanden, waarnemingskwaliteit, grote
   soortgroep en een opgezochte orde of familie.
 - Vlinders als rechtstreekse hoofdgroep selecteren.
+- Bloemdieren (Anthozoa, taxon 47533) als rechtstreekse hoofdgroep selecteren.
 - Hoofdgroepen kiezen in hetzelfde raster met ronde keuzes als de maanden;
   daarbij blijft steeds precies één hoofdgroep actief.
 - Ordes en families zoeken met een formulier dat zowel op de zoekknop als via
