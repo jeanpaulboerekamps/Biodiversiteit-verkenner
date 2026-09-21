@@ -834,8 +834,8 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
     maximum = len(frame)
-    if maximum == 1:
-        shown = 1
+    if maximum <= 10:
+        shown = maximum
     else:
         default = min(50, maximum)
         shown = st.slider(
