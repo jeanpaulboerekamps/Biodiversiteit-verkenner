@@ -91,6 +91,9 @@ div.stButton > button, div.stDownloadButton > button {
 .species-photo.seen-here,.species-photo-empty.seen-here {
   outline:4px solid #228b45;outline-offset:-4px
 }
+.species-photo.only-here,.species-photo-empty.only-here {
+  outline:4px solid #1976d2;outline-offset:-4px
+}
 .species-card a {color:inherit;text-decoration:none}
 .species-photo {display:block;width:100%;height:178px;object-fit:cover;background:#e5e7e9}
 .species-photo-empty {height:178px;display:flex;align-items:center;justify-content:center;
@@ -128,7 +131,7 @@ def init_state():
         "personal_families": set(),
         "personal_lineage_ids": set(),
         "personal_loaded_for": None,
-        "personal_area_species": set(),
+        "personal_area_species": {},
         "personal_area_loaded_for": None,
         "area_taxonomy_frame": None,
         "taxon_candidates": [],
@@ -148,7 +151,7 @@ def clear_results():
     st.session_state.personal_families = set()
     st.session_state.personal_lineage_ids = set()
     st.session_state.personal_loaded_for = None
-    st.session_state.personal_area_species = set()
+    st.session_state.personal_area_species = {}
     st.session_state.personal_area_loaded_for = None
     st.session_state.area_taxonomy_frame = None
     st.session_state.explore_meta = {}
@@ -788,7 +791,7 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_personal_area_species(username, geometry_json, taxon_id=None):
-    """Own species observed inside the drawn polygon, across all years."""
+    """Own observation counts per species inside the drawn polygon, across all years."""
     polygon = shape(json.loads(geometry_json))
     west, south, east, north = polygon.bounds
     params = {"user_id": username, "geo": "true", "locale": "en"}
@@ -799,7 +802,7 @@ def fetch_personal_area_species(username, geometry_json, taxon_id=None):
     )
     if truncated:
         raise RuntimeError(
-            "Er zijn te veel eigen waarnemingen in dit gebied om de groene randen "
+            "Er zijn te veel eigen waarnemingen in dit gebied om de fotoranden "
             "betrouwbaar te bepalen. Probeer een kleiner gebied."
         )
     inside = {}
@@ -816,7 +819,7 @@ def fetch_personal_area_species(username, geometry_json, taxon_id=None):
         and taxon.get("rank") != "species"
     }
     lookup = fetch_leaf_taxonomy(tuple(sorted(lower_ranks))) if lower_ranks else {}
-    species = set()
+    species_counts = {}
     for observation in inside.values():
         taxon = observation.get("taxon") or {}
         species_id = (
@@ -825,12 +828,12 @@ def fetch_personal_area_species(username, geometry_json, taxon_id=None):
             else rank_id(taxon, lookup, "species")
         )
         if species_id:
-            species.add(species_id)
-    return species
+            species_counts[species_id] = species_counts.get(species_id, 0) + 1
+    return species_counts
 
 
 def show_species_grid(frame, include_personal=False, highlight_unseen=False,
-                      seen_here=frozenset(), key="species"):
+                      seen_here=None, key="species"):
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
@@ -852,7 +855,11 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
         observations = int(row.get("Waarnemingen in gebied") or 0)
         personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
         card_class = "species-card unseen" if highlight_unseen and personal == 0 else "species-card"
-        photo_border = " seen-here" if int(row["species_id"]) in seen_here else ""
+        area_count = (seen_here or {}).get(int(row["species_id"]), 0)
+        photo_border = (
+            " only-here" if area_count and area_count == personal else
+            " seen-here" if area_count else ""
+        )
         photo = (
             f'<img class="species-photo{photo_border}" src="{photo_url}" alt="{name}" loading="lazy">'
             if photo_url else f'<div class="species-photo-empty{photo_border}">🌿</div>'
@@ -890,7 +897,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.13 · eigen vondsten in gebied</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.14 · fotorand naar vindplaats</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1132,7 +1139,7 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
         st.session_state.personal_families = set()
         st.session_state.personal_lineage_ids = set()
         st.session_state.personal_loaded_for = None
-        st.session_state.personal_area_species = set()
+        st.session_state.personal_area_species = {}
         st.session_state.personal_area_loaded_for = None
         st.session_state.area_taxonomy_frame = None
         st.session_state.explore_meta = {
@@ -1201,7 +1208,7 @@ if frame is not None:
     )
     unseen = filtered[~filtered["species_id"].isin(personal_counts)].copy()
 
-    seen_here = set()
+    seen_here = {}
     if username and personal_ready:
         geometry = normalize_geometry_longitudes(st.session_state.areas[meta["area"]])
         geometry_json = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
@@ -1216,7 +1223,7 @@ if frame is not None:
                     area_status.update(label="Eigen vondsten in gebied gecontroleerd", state="complete")
                 except Exception as exc:
                     area_status.update(label="Controle van eigen vondsten niet gelukt", state="error")
-                    st.warning(f"Groene randen kunnen niet worden getoond: {exc}")
+                    st.warning(f"Gekleurde fotoranden kunnen niet worden getoond: {exc}")
         if st.session_state.personal_area_loaded_for == area_key:
             seen_here = st.session_state.personal_area_species
 
@@ -1229,8 +1236,9 @@ if frame is not None:
     else:
         st.caption(
             "Een rode kaartrand betekent dat je de soort nog nooit hebt waargenomen. "
-            "Een groene rand om de foto betekent dat je de soort zelf binnen de "
-            "getekende grens hebt waargenomen, ongeacht jaar of maand."
+            "Een blauwe rand om de foto betekent dat je de soort uitsluitend binnen "
+            "de getekende grens hebt waargenomen. Groen betekent dat je haar binnen "
+            "én buiten het gebied hebt gezien, ongeacht jaar of maand."
         )
         show_species_grid(
             filtered,
@@ -1242,6 +1250,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.13 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.14 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
