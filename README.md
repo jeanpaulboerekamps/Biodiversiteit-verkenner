@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.12
+# Biodiversiteit Verkenner 1.13
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -9,8 +9,7 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Standaard zoeken in de laatste tien kalenderjaren.
 - Vóór de zoekactie filteren op kalendermaanden, waarnemingskwaliteit, grote
   soortgroep en een opgezochte orde of familie.
-- Vlinders als rechtstreekse hoofdgroep selecteren.
-- Bloemdieren (Anthozoa, taxon 47533) als rechtstreekse hoofdgroep selecteren.
+- Vlinders en bloemdieren als rechtstreekse hoofdgroepen selecteren.
 - Hoofdgroepen kiezen in hetzelfde raster met ronde keuzes als de maanden;
   daarbij blijft steeds precies één hoofdgroep actief.
 - Ordes en families zoeken met een formulier dat zowel op de zoekknop als via
@@ -31,15 +30,17 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Maanden kiezen met afzonderlijke ronde meerkeuzevakjes.
 - De maanden beginnen leeg, zodat bewust minimaal één maand wordt gekozen.
 - De cursor staat bij een nieuwe sessie direct in het gebruikersnaamveld.
-- Eén permanent uitgeklapt keuzemenu voor vier overzichten, met het
-  persoonlijke soortenoverzicht bovenaan.
+- Het soortenoverzicht direct tonen, gerangschikt op waarnemingen in het gebied,
+  met daarnaast het persoonlijke totale aantal waarnemingen per soort.
 - Soorten die de gebruiker nog nooit zag krijgen in het persoonlijke
   soortenoverzicht een rode kaartrand.
+- Foto's groen omlijnen van soorten die de gebruiker zelf binnen de getekende
+  gebiedsgrens heeft waargenomen, ook buiten de gekozen zoekperiode. Deze
+  controle gebruikt de exacte grens en wordt voor herhaalde weergaven bewaard.
 - Geen lege taxonomieregels onderaan de fotokaarten.
 - Het actieve gebied automatisch herstellen via de eigen URL wanneer een
   Streamlit-sessie na inactiviteit opnieuw start.
-- Persoonlijke vergelijking en volledige familietaxonomie pas laden wanneer
-  het gekozen overzicht die gegevens daadwerkelijk nodig heeft.
+- Persoonlijke vergelijking en gebiedscontrole pas laden na de verkenning.
 - De persoonlijke soortenlijst met hetzelfde vooraf gekozen soortgroep-,
   orde- of familiefilter ophalen als de gebiedsverkenning.
 - Grote soortgroepen met hun vaste iNaturalist-taxonnummer opvragen. Daardoor
@@ -53,8 +54,6 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   resultaten opleveren.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
-- Taartdiagrammen maken voor alle soorten en nog nooit geziene soorten.
-- Soorten tonen uit families waarvan de gebruiker nog nooit een soort zag.
 - Tabellen downloaden als CSV.
 
 ## Installatie
@@ -75,8 +74,10 @@ Er zijn geen wachtwoorden, API-sleutels of Streamlit Secrets nodig.
 De app begrenst API-verzoeken tot ongeveer zestig per minuut, overeenkomstig
 de richtlijn van iNaturalist. De eerste berekening gebruikt de kleinste
 rechthoek om het gekozen gebied en vraagt geen volledige taxonomie of
-persoonlijke soortenlijst op. Daardoor verschijnt het eerste fotoraster veel
-sneller. Persoonlijke overzichten kunnen daarna nog kort moeten laden.
+persoonlijke soortenlijst op. Daarna haalt het soortenoverzicht je openbare
+persoonlijke aantallen en de eigen waarnemingen binnen de getekende grens op;
+de eerste weergave kan daardoor langer duren. Herhaald bekijken met dezelfde
+instellingen gebruikt bewaarde resultaten.
 Zeer soortenrijke gebieden vragen door de automatische kaartvakverdeling meer
 API-verzoeken dan kleine gebieden, maar worden niet meer stilzwijgend bij
 3.000 of 10.000 soorten afgekapt.

@@ -13,7 +13,6 @@ import zlib
 
 import folium
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
@@ -89,6 +88,9 @@ div.stButton > button, div.stDownloadButton > button {
 .species-card {min-width:0;border:1px solid rgba(49,63,72,.18);border-radius:14px;
   overflow:hidden;background:var(--secondary-background-color);box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .species-card.unseen {border:3px solid #e53935;box-shadow:0 2px 10px rgba(229,57,53,.24)}
+.species-photo.seen-here,.species-photo-empty.seen-here {
+  outline:4px solid #228b45;outline-offset:-4px
+}
 .species-card a {color:inherit;text-decoration:none}
 .species-photo {display:block;width:100%;height:178px;object-fit:cover;background:#e5e7e9}
 .species-photo-empty {height:178px;display:flex;align-items:center;justify-content:center;
@@ -126,6 +128,8 @@ def init_state():
         "personal_families": set(),
         "personal_lineage_ids": set(),
         "personal_loaded_for": None,
+        "personal_area_species": set(),
+        "personal_area_loaded_for": None,
         "area_taxonomy_frame": None,
         "taxon_candidates": [],
         "selected_species_group": "Alle soortgroepen",
@@ -144,6 +148,8 @@ def clear_results():
     st.session_state.personal_families = set()
     st.session_state.personal_lineage_ids = set()
     st.session_state.personal_loaded_for = None
+    st.session_state.personal_area_species = set()
+    st.session_state.personal_area_loaded_for = None
     st.session_state.area_taxonomy_frame = None
     st.session_state.explore_meta = {}
 
@@ -780,21 +786,51 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
     return counts, lineage_ids, len(rows)
 
 
-def pie_frame(frame, max_slices=14):
-    if frame.empty:
-        return pd.DataFrame(columns=["Soort", "Waarnemingen"])
-    grouped = (
-        frame.groupby("Engelse naam", dropna=False)["Waarnemingen in gebied"]
-        .sum().sort_values(ascending=False)
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_personal_area_species(username, geometry_json, taxon_id=None):
+    """Own species observed inside the drawn polygon, across all years."""
+    polygon = shape(json.loads(geometry_json))
+    west, south, east, north = polygon.bounds
+    params = {"user_id": username, "geo": "true", "locale": "en"}
+    if taxon_id:
+        params["taxon_id"] = int(taxon_id)
+    observations, _, truncated = fetch_observation_tile(
+        tuple(sorted(params.items())), (south, west, north, east)
     )
-    if len(grouped) > max_slices:
-        top = grouped.iloc[:max_slices].copy()
-        top.loc["Overige soorten"] = grouped.iloc[max_slices:].sum()
-        grouped = top
-    return grouped.rename_axis("Soort").reset_index(name="Waarnemingen")
+    if truncated:
+        raise RuntimeError(
+            "Er zijn te veel eigen waarnemingen in dit gebied om de groene randen "
+            "betrouwbaar te bepalen. Probeer een kleiner gebied."
+        )
+    inside = {}
+    for observation in observations:
+        coords = (observation.get("geojson") or {}).get("coordinates") or []
+        if len(coords) < 2 or not polygon.covers(Point(coords[0], coords[1])):
+            continue
+        if observation.get("id") is not None:
+            inside[observation["id"]] = observation
+    lower_ranks = {
+        int(taxon["id"])
+        for observation in inside.values()
+        if (taxon := observation.get("taxon") or {}).get("id")
+        and taxon.get("rank") != "species"
+    }
+    lookup = fetch_leaf_taxonomy(tuple(sorted(lower_ranks))) if lower_ranks else {}
+    species = set()
+    for observation in inside.values():
+        taxon = observation.get("taxon") or {}
+        species_id = (
+            int(taxon["id"])
+            if taxon.get("rank") == "species" and taxon.get("id")
+            else rank_id(taxon, lookup, "species")
+        )
+        if species_id:
+            species.add(species_id)
+    return species
 
 
-def show_species_grid(frame, include_personal=False, highlight_unseen=False, key="species"):
+def show_species_grid(frame, include_personal=False, highlight_unseen=False,
+                      seen_here=frozenset(), key="species"):
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
@@ -816,9 +852,10 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
         observations = int(row.get("Waarnemingen in gebied") or 0)
         personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
         card_class = "species-card unseen" if highlight_unseen and personal == 0 else "species-card"
+        photo_border = " seen-here" if int(row["species_id"]) in seen_here else ""
         photo = (
-            f'<img class="species-photo" src="{photo_url}" alt="{name}" loading="lazy">'
-            if photo_url else '<div class="species-photo-empty">🌿</div>'
+            f'<img class="species-photo{photo_border}" src="{photo_url}" alt="{name}" loading="lazy">'
+            if photo_url else f'<div class="species-photo-empty{photo_border}">🌿</div>'
         )
         personal_pill = (
             f'<span class="species-pill">Mijn totaal: {personal:,}</span>'
@@ -853,7 +890,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False, key
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.12 · bloemdieren toegevoegd</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.13 · eigen vondsten in gebied</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1095,6 +1132,8 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
         st.session_state.personal_families = set()
         st.session_state.personal_lineage_ids = set()
         st.session_state.personal_loaded_for = None
+        st.session_state.personal_area_species = set()
+        st.session_state.personal_area_loaded_for = None
         st.session_state.area_taxonomy_frame = None
         st.session_state.explore_meta = {
             "area": active_area,
@@ -1136,23 +1175,9 @@ if frame is not None:
     if chosen_group and chosen_group != "Alle soortgroepen":
         st.info(f"Vooraf geselecteerde soortgroep: **{chosen_group}**")
 
-    st.subheader("Kies een overzicht")
-    overview_options = [
-        "Gebiedssoorten met mijn totale aantal waarnemingen",
-        "Welke soorten heb ik zelf nog nooit gezien?",
-        "Verdeling van de waarnemingen",
-        "Soorten uit families die voor mij volledig nieuw zijn",
-    ]
-    overview = st.radio(
-        "Overzicht",
-        overview_options,
-        index=0,
-        label_visibility="collapsed",
-    )
-
-    personal_overviews = set(overview_options)
+    st.subheader("Gebiedssoorten met mijn totale aantal waarnemingen")
     personal_ready = False
-    if overview in personal_overviews and username:
+    if username:
         personal_filter_key = (username, meta.get("iconic_taxa") or "", meta.get("taxon_id"))
         if st.session_state.personal_loaded_for != personal_filter_key:
             with st.status("Persoonlijke vergelijking laden…", expanded=True) as personal_status:
@@ -1175,95 +1200,48 @@ if frame is not None:
         filtered["species_id"].map(personal_counts).fillna(0).astype(int)
     )
     unseen = filtered[~filtered["species_id"].isin(personal_counts)].copy()
-    new_family = pd.DataFrame(columns=filtered.columns)
 
-    if overview == overview_options[3] and personal_ready:
-        if st.session_state.area_taxonomy_frame is None:
-            with st.status("Families bepalen…", expanded=True) as family_status:
-                st.write("Alleen voor dit overzicht families en ordes ophalen…")
-                st.session_state.area_taxonomy_frame = enrich_area_taxonomy(
-                    filtered.to_json(orient="split")
-                )
-                family_status.update(label="Families gereed", state="complete")
-        taxonomy_frame = st.session_state.area_taxonomy_frame.copy()
-        personal_families = {
-            int(x) for x in taxonomy_frame["family_id"].dropna().tolist()
-        }.intersection(st.session_state.personal_lineage_ids)
-        new_family = taxonomy_frame[
-            taxonomy_frame["family_id"].notna()
-            & ~taxonomy_frame["family_id"].isin(personal_families)
-        ].copy()
+    seen_here = set()
+    if username and personal_ready:
+        geometry = normalize_geometry_longitudes(st.session_state.areas[meta["area"]])
+        geometry_json = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
+        area_key = (username, geometry_json, meta.get("taxon_id"))
+        if st.session_state.personal_area_loaded_for != area_key:
+            with st.status("Eigen vondsten binnen de getekende grens controleren…") as area_status:
+                try:
+                    st.session_state.personal_area_species = fetch_personal_area_species(
+                        username, geometry_json, meta.get("taxon_id")
+                    )
+                    st.session_state.personal_area_loaded_for = area_key
+                    area_status.update(label="Eigen vondsten in gebied gecontroleerd", state="complete")
+                except Exception as exc:
+                    area_status.update(label="Controle van eigen vondsten niet gelukt", state="error")
+                    st.warning(f"Groene randen kunnen niet worden getoond: {exc}")
+        if st.session_state.personal_area_loaded_for == area_key:
+            seen_here = st.session_state.personal_area_species
 
-    metric_a, metric_b, metric_c, metric_d = st.columns(4)
+    metric_a, metric_b, metric_c = st.columns(3)
     metric_a.metric("Soorten in gebied", len(filtered))
     metric_b.metric("Waarnemingen", int(filtered["Waarnemingen in gebied"].sum()))
     metric_c.metric("Nog nooit gezien", len(unseen) if personal_ready else "—")
-    metric_d.metric(
-        "Nieuwe families",
-        new_family["family_id"].nunique() if overview == overview_options[3] and personal_ready else "—",
-    )
-
-    if overview == overview_options[0]:
-        st.markdown("### Gebiedssoorten met mijn totale aantal waarnemingen")
-        if not username:
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
-        else:
-            st.caption("Een rode rand betekent dat je deze soort nog nooit hebt waargenomen.")
-            show_species_grid(
-                filtered,
-                include_personal=True,
-                highlight_unseen=True,
-                key="mijn_ervaring_per_soort",
-            )
-
-    elif overview == overview_options[1]:
-        st.markdown("### Welke soorten heb ik zelf nog nooit gezien?")
-        if not username:
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
-        else:
-            show_species_grid(unseen, key="nog_nooit_gezien")
-
-    elif overview == overview_options[2]:
-        st.markdown("### Verdeling van de waarnemingen")
-        chart_a, chart_b = st.columns(2)
-        with chart_a:
-            st.markdown("**Alle potentiële soorten**")
-            pie_all = pie_frame(filtered)
-            if pie_all.empty:
-                st.info("Geen gegevens.")
-            else:
-                st.plotly_chart(
-                    px.pie(pie_all, names="Soort", values="Waarnemingen", hole=.32),
-                    width="stretch",
-                )
-        with chart_b:
-            st.markdown("**Soorten die ik nog nooit heb gezien**")
-            if not username:
-                st.info("Vul eerst je iNaturalist-gebruikersnaam in.")
-            else:
-                pie_unseen = pie_frame(unseen)
-                if pie_unseen.empty:
-                    st.success("Je hebt alle gevonden soorten al eens waargenomen.")
-                else:
-                    st.plotly_chart(
-                        px.pie(pie_unseen, names="Soort", values="Waarnemingen", hole=.32),
-                        width="stretch",
-                    )
-
-    elif overview == overview_options[3]:
-        st.markdown("### Soorten uit families die voor mij volledig nieuw zijn")
-        if not username:
-            st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
-        elif new_family.empty:
-            st.success("Binnen deze filters zijn geen volledig nieuwe families gevonden.")
-        else:
-            st.caption(
-                "Van deze families staat nog geen enkele soort op jouw wereldwijde iNaturalist-soortenlijst."
-            )
-            show_species_grid(new_family, key="nieuwe_families")
+    if not username:
+        st.info("Vul bovenaan je iNaturalist-gebruikersnaam in.")
+    else:
+        st.caption(
+            "Een rode kaartrand betekent dat je de soort nog nooit hebt waargenomen. "
+            "Een groene rand om de foto betekent dat je de soort zelf binnen de "
+            "getekende grens hebt waargenomen, ongeacht jaar of maand."
+        )
+        show_species_grid(
+            filtered,
+            include_personal=True,
+            highlight_unseen=True,
+            seen_here=seen_here,
+            key="mijn_ervaring_per_soort",
+        )
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.12 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.13 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
