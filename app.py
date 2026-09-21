@@ -88,12 +88,8 @@ div.stButton > button, div.stDownloadButton > button {
 .species-card {min-width:0;border:1px solid rgba(49,63,72,.18);border-radius:14px;
   overflow:hidden;background:var(--secondary-background-color);box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .species-card.unseen {border:3px solid #e53935;box-shadow:0 2px 10px rgba(229,57,53,.24)}
-.species-photo.seen-here,.species-photo-empty.seen-here {
-  outline:4px solid #228b45;outline-offset:-4px
-}
-.species-photo.only-here,.species-photo-empty.only-here {
-  outline:4px solid #1976d2;outline-offset:-4px
-}
+.species-card.seen-here {border:3px solid #228b45;box-shadow:0 2px 10px rgba(34,139,69,.24)}
+.species-card.only-here {border:3px solid #1976d2;box-shadow:0 2px 10px rgba(25,118,210,.24)}
 .species-card a {color:inherit;text-decoration:none}
 .species-photo {display:block;width:100%;height:178px;object-fit:cover;background:#e5e7e9}
 .species-photo-empty {height:178px;display:flex;align-items:center;justify-content:center;
@@ -854,15 +850,16 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
         taxon_url = html.escape(str(row.get("iNaturalist") or "#"), quote=True)
         observations = int(row.get("Waarnemingen in gebied") or 0)
         personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
-        card_class = "species-card unseen" if highlight_unseen and personal == 0 else "species-card"
         area_count = (seen_here or {}).get(int(row["species_id"]), 0)
-        photo_border = (
+        card_color = (
             " only-here" if area_count and area_count == personal else
-            " seen-here" if area_count else ""
+            " seen-here" if area_count else
+            " unseen" if highlight_unseen and personal == 0 else ""
         )
+        card_class = "species-card" + card_color
         photo = (
-            f'<img class="species-photo{photo_border}" src="{photo_url}" alt="{name}" loading="lazy">'
-            if photo_url else f'<div class="species-photo-empty{photo_border}">🌿</div>'
+            f'<img class="species-photo" src="{photo_url}" alt="{name}" loading="lazy">'
+            if photo_url else '<div class="species-photo-empty">🌿</div>'
         )
         personal_pill = (
             f'<span class="species-pill">Mijn totaal: {personal:,}</span>'
@@ -897,7 +894,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.14 · fotorand naar vindplaats</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.15 · kleurranden om hele soortkaart</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1236,7 +1233,7 @@ if frame is not None:
     else:
         st.caption(
             "Een rode kaartrand betekent dat je de soort nog nooit hebt waargenomen. "
-            "Een blauwe rand om de foto betekent dat je de soort uitsluitend binnen "
+            "Een blauwe kaartrand betekent dat je de soort uitsluitend binnen "
             "de getekende grens hebt waargenomen. Groen betekent dat je haar binnen "
             "én buiten het gebied hebt gezien, ongeacht jaar of maand."
         )
@@ -1250,6 +1247,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.14 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.15 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
