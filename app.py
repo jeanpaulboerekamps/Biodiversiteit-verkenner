@@ -728,6 +728,29 @@ def enrich_area_taxonomy(frame_json):
     return frame
 
 
+def sort_species_overview(frame, sort_by):
+    """Keep related species together by scientific order, family and name."""
+    if sort_by == "Aantal waarnemingen":
+        return frame.sort_values(
+            ["Waarnemingen in gebied", "Engelse naam"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
+
+    sorted_frame = frame.copy()
+    keys = []
+    for column in ("Orde wetenschappelijk", "Familie wetenschappelijk", "Wetenschappelijke naam"):
+        names = sorted_frame[column].fillna("").astype(str).str.strip()
+        missing = names.eq("") | names.str.casefold().eq("onbekend")
+        missing_key = f"_missing_{len(keys)}"
+        name_key = f"_name_{len(keys)}"
+        sorted_frame[missing_key] = missing
+        sorted_frame[name_key] = names.str.casefold()
+        keys.extend((missing_key, name_key))
+    return sorted_frame.sort_values(keys + ["species_id"], kind="stable").drop(
+        columns=keys
+    ).reset_index(drop=True)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
     username = (username or "").strip()
@@ -1237,6 +1260,23 @@ if frame is not None:
             "de getekende grens hebt waargenomen. Groen betekent dat je haar binnen "
             "én buiten het gebied hebt gezien, ongeacht jaar of maand."
         )
+        sort_by = st.selectbox(
+            "Sorteer soorten op",
+            ["Aantal waarnemingen", "Taxonomie (orde, familie, soort)"],
+            key="species_overview_sort",
+        )
+        if sort_by != "Aantal waarnemingen":
+            if st.session_state.area_taxonomy_frame is None:
+                with st.spinner("Taxonomie van de gebiedssoorten ophalen…"):
+                    st.session_state.area_taxonomy_frame = enrich_area_taxonomy(
+                        frame.to_json(orient="split")
+                    )
+            taxonomy = st.session_state.area_taxonomy_frame
+            filtered = taxonomy.copy()
+            filtered["Mijn waarnemingen wereldwijd"] = (
+                filtered["species_id"].map(personal_counts).fillna(0).astype(int)
+            )
+        filtered = sort_species_overview(filtered, sort_by)
         show_species_grid(
             filtered,
             include_personal=True,

@@ -16,7 +16,9 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   Enter werkt en Nederlandse, Engelse en wetenschappelijke zoektermen herkent.
 - Alleen na een geslaagde zoekactie een concreet zoekresultaat kiezen. De
   gekozen orde of familie vervangt daarbij zichtbaar de hoofdgroep.
-- Soorten rangschikken op het aantal waarnemingen in het gekozen gebied.
+- Soorten naar keuze rangschikken op het aantal waarnemingen in het gekozen
+  gebied of op taxonomie (wetenschappelijke orde, familie en soort). De
+  taxonomische gegevens worden pas bij die keuze opgehaald.
 - Foto, Engelse naam, wetenschappelijke naam en iNaturalist-link tonen in
   een responsief raster.
 - De schuifregelaar voor het soortenraster tot het volledige aantal gevonden
@@ -30,8 +32,9 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Maanden kiezen met afzonderlijke ronde meerkeuzevakjes.
 - De maanden beginnen leeg, zodat bewust minimaal één maand wordt gekozen.
 - De cursor staat bij een nieuwe sessie direct in het gebruikersnaamveld.
-- Het soortenoverzicht direct tonen, gerangschikt op waarnemingen in het gebied,
-  met daarnaast het persoonlijke totale aantal waarnemingen per soort.
+- Het soortenoverzicht direct tonen, standaard gerangschikt op waarnemingen
+  in het gebied, met daarnaast het persoonlijke totale aantal waarnemingen
+  per soort. De CSV-download volgt de gekozen sortering.
 - Soorten die de gebruiker nog nooit zag krijgen in het persoonlijke
   soortenoverzicht een rode kaartrand.
 - De volledige soortkaart blauw omlijnen als alle eigen waarnemingen van de
