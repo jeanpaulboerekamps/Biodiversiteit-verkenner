@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.15
+# Biodiversiteit Verkenner 1.16
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -17,8 +17,17 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 - Alleen na een geslaagde zoekactie een concreet zoekresultaat kiezen. De
   gekozen orde of familie vervangt daarbij zichtbaar de hoofdgroep.
 - Soorten naar keuze rangschikken op het aantal waarnemingen in het gekozen
-  gebied of op taxonomie (wetenschappelijke orde, familie en soort). De
-  taxonomische gegevens worden pas bij die keuze opgehaald.
+  gebied of op taxonomie: rijk, stam, klasse, orde, familie, geslacht en soort.
+  Binnen elk niveau staan de wetenschappelijke namen alfabetisch. Zo blijven
+  bijvoorbeeld alle vogels bij elkaar, ook wanneer meerdere ordes voorkomen.
+- Een minimumaantal waarnemingen per soort instellen. Dit gaat over de
+  gebiedswaarnemingen binnen de gekozen zoekperiode en filters, niet over
+  persoonlijke waarnemingen. Kaarten, overzichtstellers en CSV gebruiken
+  hetzelfde minimum; standaard is dat 1, zodat alle gevonden soorten zichtbaar zijn.
+- Taxonomie per taxon op schijf bewaren en hergebruiken bij andere gebieden,
+  zoekperiodes en volgende sessies. Alleen ontbrekende taxa worden opgehaald.
+  Bij taxonomisch sorteren worden alleen soorten boven het ingestelde minimum
+  aangevuld; een lager minimum haalt vervolgens alleen de extra soorten op.
 - Foto, Engelse naam, wetenschappelijke naam en iNaturalist-link tonen in
   een responsief raster.
 - De schuifregelaar voor het soortenraster tot het volledige aantal gevonden
@@ -63,8 +72,8 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
 ## Installatie
 
 Pak de zip uit en plaats de volledige inhoud in een nieuwe GitHub-repository.
-`app.py`, `requirements.txt` en `README.md` horen op het hoogste niveau; laat
-`.streamlit/config.toml` in de map `.streamlit` staan. Maak daarna een nieuwe
+`app.py`, `taxonomy.py`, `requirements.txt` en `README.md` horen op het hoogste
+niveau. Maak daarna een nieuwe
 Streamlit Community Cloud-app met `app.py` als startbestand.
 
 Lokaal starten kan vanuit de projectmap met:
@@ -85,6 +94,33 @@ instellingen gebruikt bewaarde resultaten.
 Zeer soortenrijke gebieden vragen door de automatische kaartvakverdeling meer
 API-verzoeken dan kleine gebieden, maar worden niet meer stilzwijgend bij
 3.000 of 10.000 soorten afgekapt.
+
+## Taxonomie bewaren
+
+De app maakt automatisch `.cache/taxonomy.sqlite3` aan naast `app.py`.
+Deze opslag is per taxon en taal, zonder automatische vervaldatum. De eerste
+keer kost het aanvullen van de taxonomie nog tijd; later worden alleen nog
+onbekende taxa opgehaald. Ook na het herstarten van Python blijft de cache
+bruikbaar zolang hetzelfde bestand op schijf aanwezig is. De cache bevat
+alleen openbare taxonomie, geen gebruikersnamen of persoonlijke waarnemingen.
+
+Bij hosting met een tijdelijke schijf kan de cache bij een nieuwe deployment
+of vervanging van de server verdwijnen. Voor behoud over zulke herstarts heen
+kun je `BIODIVERSITEIT_CACHE_DIR` instellen op een blijvend opslagvolume. Neem
+het bestand anders mee in een back-up en herstel het op dezelfde plek.
+
+Taxonomie kan incidenteel worden herzien. Om bewust alles opnieuw op te halen:
+stop de app, verwijder `.cache/taxonomy.sqlite3` (of hetzelfde bestand in de
+ingestelde cachemap) en start de app opnieuw.
+
+## Controles
+
+De regressiecontroles voor gemengde soortgroepen, hergebruik van de cache en
+het minimumfilter draaien zonder iNaturalist-aanroepen:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Belangrijk
 

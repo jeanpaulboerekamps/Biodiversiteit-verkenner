@@ -19,6 +19,10 @@ import streamlit.components.v1 as components
 from folium.plugins import Draw
 from shapely.geometry import Point, shape
 from streamlit_folium import st_folium
+from taxonomy import (
+    enrich_species_taxonomy, load_leaf_taxonomy, rank_id, rank_names,
+    sort_species_overview,
+)
 
 
 OBS_API = "https://api.inaturalist.org/v1/observations"
@@ -129,7 +133,6 @@ def init_state():
         "personal_loaded_for": None,
         "personal_area_species": {},
         "personal_area_loaded_for": None,
-        "area_taxonomy_frame": None,
         "taxon_candidates": [],
         "selected_species_group": "Alle soortgroepen",
         "focus_username": True,
@@ -149,7 +152,6 @@ def clear_results():
     st.session_state.personal_loaded_for = None
     st.session_state.personal_area_species = {}
     st.session_state.personal_area_loaded_for = None
-    st.session_state.area_taxonomy_frame = None
     st.session_state.explore_meta = {}
 
 
@@ -550,59 +552,22 @@ def fetch_taxa_by_ids(ids_tuple, locale="en"):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_leaf_taxonomy(ids_tuple, locale="en"):
-    """Fetch leaf taxa; each response already carries its complete ancestors."""
-    ids = sorted({int(x) for x in ids_tuple if x})
-    batches = [ids[i:i + 30] for i in range(0, len(ids), 30)]
+    """Reuse taxonomy on disk, including across areas and Streamlit sessions."""
 
-    def add_record(target, taxon):
-        if not taxon or not taxon.get("id"):
-            return
-        target[int(taxon["id"])] = {
-            "id": int(taxon["id"]),
-            "rank": taxon.get("rank"),
-            "name": taxon.get("name"),
-            "preferred_common_name": taxon.get("preferred_common_name"),
-            "photo": compact_photo(taxon.get("default_photo")),
-            "ancestor_ids": [
-                int(x) for x in (taxon.get("ancestor_ids") or []) if str(x).isdigit()
-            ] + [int(taxon["id"])],
-        }
-
-    def fetch_batch(batch):
+    def fetch_batch(batch, batch_locale):
         payload = request_json(
             f"{TAXA_API}/" + ",".join(str(x) for x in batch),
-            {"per_page": len(batch), "locale": locale},
+            {"per_page": len(batch), "locale": batch_locale},
         )
-        out = {}
-        for taxon in payload.get("results", []):
-            add_record(out, taxon)
-            for ancestor in taxon.get("ancestors") or []:
-                add_record(out, ancestor)
-        return out
+        return [
+            {
+                **compact_taxon(taxon),
+                "ancestors": [compact_taxon(ancestor) for ancestor in taxon.get("ancestors") or []],
+            }
+            for taxon in payload.get("results", []) if taxon.get("id")
+        ]
 
-    result = {}
-    if batches:
-        with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
-            for future in as_completed([executor.submit(fetch_batch, batch) for batch in batches]):
-                result.update(future.result())
-    return result
-
-
-def rank_id(taxon, lookup, wanted_rank):
-    for tid in reversed(taxon.get("ancestor_ids") or []):
-        record = lookup.get(int(tid))
-        if record and record.get("rank") == wanted_rank:
-            return int(tid)
-    if taxon.get("rank") == wanted_rank and taxon.get("id"):
-        return int(taxon["id"])
-    return None
-
-
-def rank_names(taxon_id, lookup):
-    record = lookup.get(int(taxon_id)) if taxon_id else None
-    if not record:
-        return None, None
-    return record.get("preferred_common_name") or record.get("name"), record.get("name")
+    return load_leaf_taxonomy(ids_tuple, fetch_batch, locale)
 
 
 def build_area_species(observations, geometry):
@@ -709,46 +674,10 @@ def build_fast_area_species(count_rows, group_label=""):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def enrich_area_taxonomy(frame_json):
-    """Resolve family and order only for the overview that actually needs them."""
+    """Resolve the hierarchy only for species that pass the overview filter."""
     frame = pd.read_json(StringIO(frame_json), orient="split")
     lookup = fetch_leaf_taxonomy(tuple(sorted(int(x) for x in frame["species_id"].tolist())))
-    for index, row in frame.iterrows():
-        species_id = int(row["species_id"])
-        taxon = lookup.get(species_id, {})
-        family_id = rank_id(taxon, lookup, "family")
-        order_id = rank_id(taxon, lookup, "order")
-        family_nl, family_scientific = rank_names(family_id, lookup)
-        order_nl, order_scientific = rank_names(order_id, lookup)
-        frame.at[index, "family_id"] = family_id
-        frame.at[index, "Familie"] = family_nl or family_scientific or "Onbekend"
-        frame.at[index, "Familie wetenschappelijk"] = family_scientific or "Onbekend"
-        frame.at[index, "order_id"] = order_id
-        frame.at[index, "Orde"] = order_nl or order_scientific or "Onbekend"
-        frame.at[index, "Orde wetenschappelijk"] = order_scientific or "Onbekend"
-    return frame
-
-
-def sort_species_overview(frame, sort_by):
-    """Keep related species together by scientific order, family and name."""
-    if sort_by == "Aantal waarnemingen":
-        return frame.sort_values(
-            ["Waarnemingen in gebied", "Engelse naam"],
-            ascending=[False, True],
-        ).reset_index(drop=True)
-
-    sorted_frame = frame.copy()
-    keys = []
-    for column in ("Orde wetenschappelijk", "Familie wetenschappelijk", "Wetenschappelijke naam"):
-        names = sorted_frame[column].fillna("").astype(str).str.strip()
-        missing = names.eq("") | names.str.casefold().eq("onbekend")
-        missing_key = f"_missing_{len(keys)}"
-        name_key = f"_name_{len(keys)}"
-        sorted_frame[missing_key] = missing
-        sorted_frame[name_key] = names.str.casefold()
-        keys.extend((missing_key, name_key))
-    return sorted_frame.sort_values(keys + ["species_id"], kind="stable").drop(
-        columns=keys
-    ).reset_index(drop=True)
+    return enrich_species_taxonomy(frame, lookup)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -917,7 +846,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.15 · kleurranden om hele soortkaart</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.16 · taxonomie en minimumaantal</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1161,7 +1090,6 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
         st.session_state.personal_loaded_for = None
         st.session_state.personal_area_species = {}
         st.session_state.personal_area_loaded_for = None
-        st.session_state.area_taxonomy_frame = None
         st.session_state.explore_meta = {
             "area": active_area,
             "username": username,
@@ -1203,6 +1131,28 @@ if frame is not None:
         st.info(f"Vooraf geselecteerde soortgroep: **{chosen_group}**")
 
     st.subheader("Gebiedssoorten met mijn totale aantal waarnemingen")
+    sort_col, minimum_col = st.columns(2)
+    with sort_col:
+        sort_by = st.selectbox(
+            "Sorteer soorten op",
+            ["Aantal waarnemingen", "Taxonomie (rijk → soort)"],
+            key="species_overview_sort",
+            help="Taxonomie groepeert op rijk, stam, klasse, orde, familie en geslacht; "
+                 "binnen elke groep alfabetisch op de wetenschappelijke naam.",
+        )
+    with minimum_col:
+        minimum_observations = st.number_input(
+            "Minimumaantal waarnemingen in gebied",
+            min_value=1, value=1, step=1,
+            key="species_overview_minimum",
+            help="Toon alleen soorten met minstens dit aantal waarnemingen binnen "
+                 "de gekozen jaren, maanden en overige zoekfilters. Geldt ook voor de CSV-download.",
+        )
+    filtered = filtered[
+        filtered["Waarnemingen in gebied"] >= minimum_observations
+    ].copy()
+    st.caption(f"{len(filtered):,} van {len(frame):,} soorten voldoen aan het minimumaantal.")
+
     personal_ready = False
     if username:
         personal_filter_key = (username, meta.get("iconic_taxa") or "", meta.get("taxon_id"))
@@ -1260,22 +1210,9 @@ if frame is not None:
             "de getekende grens hebt waargenomen. Groen betekent dat je haar binnen "
             "én buiten het gebied hebt gezien, ongeacht jaar of maand."
         )
-        sort_by = st.selectbox(
-            "Sorteer soorten op",
-            ["Aantal waarnemingen", "Taxonomie (orde, familie, soort)"],
-            key="species_overview_sort",
-        )
-        if sort_by != "Aantal waarnemingen":
-            if st.session_state.area_taxonomy_frame is None:
-                with st.spinner("Taxonomie van de gebiedssoorten ophalen…"):
-                    st.session_state.area_taxonomy_frame = enrich_area_taxonomy(
-                        frame.to_json(orient="split")
-                    )
-            taxonomy = st.session_state.area_taxonomy_frame
-            filtered = taxonomy.copy()
-            filtered["Mijn waarnemingen wereldwijd"] = (
-                filtered["species_id"].map(personal_counts).fillna(0).astype(int)
-            )
+        if sort_by != "Aantal waarnemingen" and not filtered.empty:
+            with st.spinner("Bewaarde taxonomie laden en ontbrekende soorten aanvullen…"):
+                filtered = enrich_area_taxonomy(filtered.to_json(orient="split"))
         filtered = sort_species_overview(filtered, sort_by)
         show_species_grid(
             filtered,
@@ -1287,6 +1224,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.15 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.16 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
