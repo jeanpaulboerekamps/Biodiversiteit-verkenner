@@ -887,7 +887,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.20 · PDF-overzicht</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.21 · compact PDF-overzicht</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1271,6 +1271,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.20 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.21 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )

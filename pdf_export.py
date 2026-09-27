@@ -42,9 +42,11 @@ def _photo(url):
                 chunks.append(chunk)
         with Image.open(BytesIO(b''.join(chunks))) as source:
             picture = ImageOps.exif_transpose(source).convert('RGB')
-            picture = ImageOps.fit(picture, (720, 570), method=Image.Resampling.LANCZOS)
+            # A card is only about 130 pt wide. Keep enough pixels for print,
+            # but avoid embedding full-size images in a many-page PDF.
+            picture = ImageOps.fit(picture, (300, 300), method=Image.Resampling.LANCZOS)
             output = BytesIO()
-            picture.save(output, format='JPEG', quality=87)
+            picture.save(output, format='JPEG', quality=60, optimize=True)
             return output.getvalue()
     except (URLError, OSError, ValueError, Image.DecompressionBombError):
         return None
@@ -150,11 +152,14 @@ def create_overview_pdf(frame, meta, *, sort_by, minimum, username='',
         path.roundRect(x, bottom, card_width, height, 6)
         pdf.clipPath(path, stroke=0)
         if photo:
-            with Image.open(BytesIO(photo)) as source:
-                fitted = ImageOps.fit(source, (600, max(1, round(600*photo_height/card_width))),
-                                      method=Image.Resampling.LANCZOS)
-                pdf.drawImage(ImageReader(fitted), x, top-photo_height,
-                              width=card_width, height=photo_height)
+            # Pass the JPEG bytes directly: ReportLab embeds the compressed
+            # stream instead of inflating a Pillow bitmap into the PDF.
+            photo_clip = pdf.beginPath()
+            photo_clip.rect(x, top-photo_height, card_width, photo_height)
+            pdf.clipPath(photo_clip, stroke=0)
+            pdf.drawImage(ImageReader(BytesIO(photo)), x,
+                          top-photo_height-(card_width-photo_height)/2,
+                          width=card_width, height=card_width)
         else:
             pdf.setFillColor(HexColor('#e4ece5'))
             pdf.rect(x, top-photo_height, card_width, photo_height, fill=1, stroke=0)

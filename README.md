@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.20
+# Biodiversiteit Verkenner 1.21
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -76,6 +76,8 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   melding in de app en een lege fotoplaats in de PDF. Elke A4-pagina bevat maximaal 16 kaarten in een raster van 4 bij 4.
   De eerste pagina bevat ook de samenvatting met zoekinstellingen en de
   kerncijfers van het volledige gefilterde overzicht.
+  Foto's worden voor het PDF-formaat verkleind en als gecomprimeerde JPEG
+  bewaard; daardoor blijft ook een overzicht met veel soorten veel kleiner.
 
 ## Installatie
 
