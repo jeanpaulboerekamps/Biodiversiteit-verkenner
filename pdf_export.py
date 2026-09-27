@@ -3,24 +3,12 @@
 from datetime import date
 from html import escape
 from io import BytesIO
-from pathlib import Path
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-
-
-FONT_DIR = Path(__file__).resolve().parent / "fonts"
-
-
-def _fonts():
-    if "Explorer" not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont("Explorer", str(FONT_DIR / "DejaVuSans.ttf")))
-        pdfmetrics.registerFont(TTFont("Explorer-Bold", str(FONT_DIR / "DejaVuSans-Bold.ttf")))
 
 
 def _value(value):
@@ -37,7 +25,6 @@ def _value(value):
 
 def create_overview_pdf(frame, meta, *, sort_by, minimum, username="", personal_ready=False):
     """Return PDF bytes with every filtered species, in the supplied order."""
-    _fonts()
     output = BytesIO()
     document = SimpleDocTemplate(
         output, pagesize=landscape(A4), leftMargin=36, rightMargin=36,
@@ -45,9 +32,9 @@ def create_overview_pdf(frame, meta, *, sort_by, minimum, username="", personal_
         title=f"Biodiversiteit Verkenner - {meta.get('area', 'Gebied')}",
         author="Biodiversiteit Verkenner",
     )
-    normal = ParagraphStyle("normal", fontName="Explorer", fontSize=8, leading=12)
-    heading = ParagraphStyle("heading", parent=normal, fontName="Explorer-Bold", fontSize=16, leading=21)
-    subheading = ParagraphStyle("subheading", parent=normal, fontName="Explorer-Bold", fontSize=10, leading=14)
+    normal = ParagraphStyle("normal", fontName="Helvetica", fontSize=8, leading=12)
+    heading = ParagraphStyle("heading", parent=normal, fontName="Helvetica-Bold", fontSize=16, leading=21)
+    subheading = ParagraphStyle("subheading", parent=normal, fontName="Helvetica-Bold", fontSize=10, leading=14)
     small = ParagraphStyle("small", parent=normal, fontSize=7, leading=10)
     table_text = ParagraphStyle("table", parent=normal, fontSize=7, leading=10)
     table_right = ParagraphStyle("table-right", parent=table_text, alignment=TA_RIGHT)
@@ -117,7 +104,7 @@ def create_overview_pdf(frame, meta, *, sort_by, minimum, username="", personal_
 
     def footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Explorer", 7)
+        canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#52635a"))
         canvas.drawString(36, 23, f"Biodiversiteit Verkenner  |  {date.today():%d-%m-%Y}")
         canvas.drawRightString(landscape(A4)[0] - 36, 23, f"Pagina {doc.page}")

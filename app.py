@@ -786,15 +786,42 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
                       seen_here=None, key="species", pdf_meta=None,
                       pdf_sort="Aantal waarnemingen", pdf_minimum=1,
                       pdf_username="", personal_ready=False):
+    columns = ["Engelse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
+    if include_personal:
+        columns.append("Mijn waarnemingen wereldwijd")
+    columns += ["Familie", "Orde"]
+    export_columns = [c for c in columns if c not in {"Foto", "iNaturalist"}]
+    csv_col, pdf_col = st.columns(2)
+    with csv_col:
+        st.download_button(
+            "⬇️ Tabel downloaden als CSV",
+            frame[export_columns].to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{key}.csv",
+            mime="text/csv",
+            key=f"csv_{key}",
+        )
+    if pdf_meta is not None:
+        safe_area = re.sub(r"[^a-zA-Z0-9_-]+", "-", pdf_meta.get("area") or "gebied").strip("-") or "gebied"
+        with pdf_col:
+            st.download_button(
+                "⬇️ Overzicht opslaan als PDF",
+                create_overview_pdf(
+                    frame, pdf_meta, sort_by=pdf_sort, minimum=pdf_minimum,
+                    username=pdf_username, personal_ready=personal_ready,
+                ),
+                file_name=f"biodiversiteit-{safe_area}.pdf",
+                mime="application/pdf",
+                key=f"pdf_{key}",
+            )
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
+        return
     maximum = len(frame)
     if maximum <= 10:
         shown = maximum
     else:
-        default = min(50, maximum)
         shown = st.slider(
-            "Aantal soorten tonen", 10 if maximum >= 10 else 1, maximum, default,
+            "Aantal soorten tonen", 10, maximum, min(50, maximum),
             key=f"limit_{key}",
         )
     cards = []
@@ -831,41 +858,13 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
             '</div>'
             '</div></a></article>'
         )
-    if cards:
-        st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
-    columns = ["Engelse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
-    if include_personal:
-        columns.append("Mijn waarnemingen wereldwijd")
-    columns += ["Familie", "Orde"]
-    export_columns = [c for c in columns if c not in {"Foto", "iNaturalist"}]
-    csv_col, pdf_col = st.columns(2)
-    with csv_col:
-        st.download_button(
-            "⬇️ Tabel downloaden als CSV",
-            frame[export_columns].to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"{key}.csv",
-            mime="text/csv",
-            key=f"csv_{key}",
-        )
-    if pdf_meta is not None:
-        safe_area = re.sub(r"[^a-zA-Z0-9_-]+", "-", pdf_meta.get("area") or "gebied").strip("-") or "gebied"
-        with pdf_col:
-            st.download_button(
-                "⬇️ Overzicht opslaan als PDF",
-                create_overview_pdf(
-                    frame, pdf_meta, sort_by=pdf_sort, minimum=pdf_minimum,
-                    username=pdf_username, personal_ready=personal_ready,
-                ),
-                file_name=f"biodiversiteit-{safe_area}.pdf",
-                mime="application/pdf",
-                key=f"pdf_{key}",
-            )
+    st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
 
 
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.17 · PDF-overzicht</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.18 · PDF-overzicht</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1249,6 +1248,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.17 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.18 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
