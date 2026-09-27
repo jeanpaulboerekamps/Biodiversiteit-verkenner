@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import base64
 import html
+import hashlib
 from io import StringIO
 import json
 import logging
@@ -20,7 +21,7 @@ import streamlit.components.v1 as components
 from folium.plugins import Draw
 from shapely.geometry import Point, shape
 from streamlit_folium import st_folium
-from pdf_export import create_overview_pdf
+from pdf_export import create_overview_pdf, species_border
 from taxonomy import (
     enrich_species_taxonomy, load_leaf_taxonomy, rank_id, rank_names,
     sort_species_overview,
@@ -786,44 +787,66 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
                       seen_here=None, key="species", pdf_meta=None,
                       pdf_sort="Aantal waarnemingen", pdf_minimum=1,
                       pdf_username="", personal_ready=False):
+    # Reserve the top position while reading the slider before building exports.
+    export_controls = st.container()
+    maximum = len(frame)
+    shown = maximum if maximum <= 10 else st.slider(
+        "Aantal soorten tonen", 10, maximum, min(50, maximum), key=f"limit_{key}",
+    )
+    visible = frame.head(shown)
     columns = ["Engelse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
     if include_personal:
         columns.append("Mijn waarnemingen wereldwijd")
     columns += ["Familie", "Orde"]
-    export_columns = [c for c in columns if c not in {"Foto", "iNaturalist"}]
-    csv_col, pdf_col = st.columns(2)
-    with csv_col:
-        st.download_button(
-            "⬇️ Tabel downloaden als CSV",
-            frame[export_columns].to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"{key}.csv",
-            mime="text/csv",
-            key=f"csv_{key}",
-        )
-    if pdf_meta is not None:
-        safe_area = re.sub(r"[^a-zA-Z0-9_-]+", "-", pdf_meta.get("area") or "gebied").strip("-") or "gebied"
-        with pdf_col:
+    with export_controls:
+        csv_col, pdf_col = st.columns(2)
+        with csv_col:
             st.download_button(
-                "⬇️ Overzicht opslaan als PDF",
-                create_overview_pdf(
-                    frame, pdf_meta, sort_by=pdf_sort, minimum=pdf_minimum,
-                    username=pdf_username, personal_ready=personal_ready,
-                ),
-                file_name=f"biodiversiteit-{safe_area}.pdf",
-                mime="application/pdf",
-                key=f"pdf_{key}",
+                "⬇️ Tabel downloaden als CSV",
+                frame[columns].to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"{key}.csv", mime="text/csv", key=f"csv_{key}",
             )
+        if pdf_meta is not None:
+            safe_area = re.sub(r"[^a-zA-Z0-9_-]+", "-", pdf_meta.get("area") or "gebied").strip("-") or "gebied"
+            fingerprint = hashlib.sha256((visible.to_json(orient="split") + json.dumps(
+                [pdf_meta, pdf_sort, pdf_minimum, pdf_username, personal_ready,
+                 include_personal, highlight_unseen, seen_here or {}], sort_keys=True,
+            )).encode()).hexdigest()
+            cache_key = f"pdf_ready_{key}"
+            cached = st.session_state.get(cache_key)
+            if cached and cached[0] != fingerprint:
+                st.session_state.pop(cache_key, None)
+                cached = None
+            with pdf_col:
+                if not cached and st.button("📄 Fotokaarten als PDF maken", key=f"prepare_pdf_{key}"):
+                    try:
+                        with st.spinner(f"PDF met {shown} fotokaarten maken…"):
+                            data, failed = create_overview_pdf(
+                                visible, pdf_meta, sort_by=pdf_sort, minimum=pdf_minimum,
+                                username=pdf_username, personal_ready=personal_ready,
+                                seen_here=seen_here, include_personal=include_personal,
+                                highlight_unseen=highlight_unseen,
+                            )
+                        cached = (fingerprint, data, failed)
+                        st.session_state[cache_key] = cached
+                    except Exception:
+                        log.exception("PDF-export mislukt")
+                        st.error("De PDF kon niet worden gemaakt. Probeer het opnieuw.")
+                if cached:
+                    st.download_button(
+                        "⬇️ Fotokaarten als PDF downloaden", cached[1],
+                        file_name=f"biodiversiteit-{safe_area}.pdf", mime="application/pdf",
+                        key=f"pdf_{key}",
+                    )
+                    if cached[2]:
+                        st.warning(f"{cached[2]} foto(s) konden niet worden geladen.")
+                        if st.button("Foto’s opnieuw proberen", key=f"retry_pdf_{key}"):
+                            st.session_state.pop(cache_key, None)
+                            st.rerun()
+        st.caption(f"PDF: de {shown} zichtbare fotokaarten, met dezelfde volgorde en gekleurde randen. CSV: alle {maximum} gefilterde soorten.")
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
         return
-    maximum = len(frame)
-    if maximum <= 10:
-        shown = maximum
-    else:
-        shown = st.slider(
-            "Aantal soorten tonen", 10, maximum, min(50, maximum),
-            key=f"limit_{key}",
-        )
     cards = []
     for _, row in frame.head(shown).iterrows():
         name = html.escape(str(row.get("Engelse naam") or row.get("Wetenschappelijke naam") or "Unknown species"))
@@ -832,13 +855,8 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
         taxon_url = html.escape(str(row.get("iNaturalist") or "#"), quote=True)
         observations = int(row.get("Waarnemingen in gebied") or 0)
         personal = int(row.get("Mijn waarnemingen wereldwijd") or 0)
-        area_count = (seen_here or {}).get(int(row["species_id"]), 0)
-        card_color = (
-            " only-here" if area_count and area_count == personal else
-            " seen-here" if area_count else
-            " unseen" if highlight_unseen and personal == 0 else ""
-        )
-        card_class = "species-card" + card_color
+        border_class, _ = species_border(row, seen_here, highlight_unseen)
+        card_class = "species-card" + (f" {border_class}" if border_class else "")
         photo = (
             f'<img class="species-photo" src="{photo_url}" alt="{name}" loading="lazy">'
             if photo_url else '<div class="species-photo-empty">🌿</div>'
@@ -864,7 +882,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.18 · PDF-overzicht</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.19 · PDF-overzicht</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1248,6 +1266,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.18 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.19 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
