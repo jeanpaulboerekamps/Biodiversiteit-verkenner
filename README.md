@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.19
+# Biodiversiteit Verkenner 1.20
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -73,8 +73,9 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   “Aantal soorten tonen” hoeveel kaarten je wilt exporteren.
 - Klik op “Fotokaarten als PDF maken” en daarna op “Fotokaarten als PDF downloaden”.
   Foto's worden pas bij het maken opgehaald. Niet-beschikbare foto's krijgen een
-  melding in de app en een lege fotoplaats in de PDF. Kaarten staan met twee per
-  rij op A4 en worden niet over pagina's verdeeld.
+  melding in de app en een lege fotoplaats in de PDF. Elke A4-pagina bevat maximaal 16 kaarten in een raster van 4 bij 4.
+  De eerste pagina bevat ook de samenvatting met zoekinstellingen en de
+  kerncijfers van het volledige gefilterde overzicht.
 
 ## Installatie
 

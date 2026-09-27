@@ -826,6 +826,11 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
                                 username=pdf_username, personal_ready=personal_ready,
                                 seen_here=seen_here, include_personal=include_personal,
                                 highlight_unseen=highlight_unseen,
+                                summary={
+                                    'species': len(frame),
+                                    'observations': int(frame['Waarnemingen in gebied'].sum()),
+                                    'unseen': int((frame['Mijn waarnemingen wereldwijd'] == 0).sum()) if include_personal else 0,
+                                },
                             )
                         cached = (fingerprint, data, failed)
                         st.session_state[cache_key] = cached
@@ -882,7 +887,7 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.19 · PDF-overzicht</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.20 · PDF-overzicht</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1266,6 +1271,6 @@ if frame is not None:
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.19 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.20 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
