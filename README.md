@@ -1,4 +1,4 @@
-# Biodiversiteit Verkenner 1.16
+# Biodiversiteit Verkenner 1.17
 
 Een zelfstandige Streamlit-app om de verwachte biodiversiteit van nog niet
 bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
@@ -67,12 +67,15 @@ bezochte gebieden te verkennen met openbare iNaturalist-waarnemingen.
   resultaten opleveren.
 - Vergelijken met een openbare persoonlijke iNaturalist-soortenlijst.
 - Persoonlijke totale waarnemingsaantallen per soort tonen.
-- Tabellen downloaden als CSV.
+- Het volledige gefilterde en gesorteerde soortenoverzicht downloaden als CSV
+  of als paginagewijs PDF-rapport, met zoekinstellingen en kerncijfers. De PDF
+  bevat alle soorten, ook wanneer op het scherm minder fotokaarten zichtbaar zijn.
 
 ## Installatie
 
 Pak de zip uit en plaats de volledige inhoud in een nieuwe GitHub-repository.
-`app.py`, `taxonomy.py`, `requirements.txt` en `README.md` horen op het hoogste
+`app.py`, `pdf_export.py`, `taxonomy.py`, `requirements.txt`, `README.md` en de
+map `fonts` horen op het hoogste
 niveau. Maak daarna een nieuwe
 Streamlit Community Cloud-app met `app.py` als startbestand.
 

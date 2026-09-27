@@ -6,6 +6,7 @@ from io import StringIO
 import json
 import logging
 import math
+import re
 import sys
 import threading
 import time
@@ -19,6 +20,7 @@ import streamlit.components.v1 as components
 from folium.plugins import Draw
 from shapely.geometry import Point, shape
 from streamlit_folium import st_folium
+from pdf_export import create_overview_pdf
 from taxonomy import (
     enrich_species_taxonomy, load_leaf_taxonomy, rank_id, rank_names,
     sort_species_overview,
@@ -781,10 +783,11 @@ def fetch_personal_area_species(username, geometry_json, taxon_id=None):
 
 
 def show_species_grid(frame, include_personal=False, highlight_unseen=False,
-                      seen_here=None, key="species"):
+                      seen_here=None, key="species", pdf_meta=None,
+                      pdf_sort="Aantal waarnemingen", pdf_minimum=1,
+                      pdf_username="", personal_ready=False):
     if frame.empty:
         st.info("Binnen deze filters zijn geen soorten gevonden.")
-        return
     maximum = len(frame)
     if maximum <= 10:
         shown = maximum
@@ -828,25 +831,41 @@ def show_species_grid(frame, include_personal=False, highlight_unseen=False,
             '</div>'
             '</div></a></article>'
         )
-    st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
+    if cards:
+        st.markdown('<div class="species-grid">' + "".join(cards) + '</div>', unsafe_allow_html=True)
     columns = ["Engelse naam", "Wetenschappelijke naam", "Waarnemingen in gebied"]
     if include_personal:
         columns.append("Mijn waarnemingen wereldwijd")
     columns += ["Familie", "Orde"]
     export_columns = [c for c in columns if c not in {"Foto", "iNaturalist"}]
-    st.download_button(
-        "⬇️ Tabel downloaden als CSV",
-        frame[export_columns].to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"{key}.csv",
-        mime="text/csv",
-        key=f"csv_{key}",
-    )
+    csv_col, pdf_col = st.columns(2)
+    with csv_col:
+        st.download_button(
+            "⬇️ Tabel downloaden als CSV",
+            frame[export_columns].to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{key}.csv",
+            mime="text/csv",
+            key=f"csv_{key}",
+        )
+    if pdf_meta is not None:
+        safe_area = re.sub(r"[^a-zA-Z0-9_-]+", "-", pdf_meta.get("area") or "gebied").strip("-") or "gebied"
+        with pdf_col:
+            st.download_button(
+                "⬇️ Overzicht opslaan als PDF",
+                create_overview_pdf(
+                    frame, pdf_meta, sort_by=pdf_sort, minimum=pdf_minimum,
+                    username=pdf_username, personal_ready=personal_ready,
+                ),
+                file_name=f"biodiversiteit-{safe_area}.pdf",
+                mime="application/pdf",
+                key=f"pdf_{key}",
+            )
 
 
 init_state()
 restore_remembered_area()
 
-st.markdown('<span class="release-badge">Versie 1.16 · taxonomie en minimumaantal</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Versie 1.17 · PDF-overzicht</span>', unsafe_allow_html=True)
 st.title("🧭 Biodiversiteit Verkenner")
 st.markdown(
     '<div class="intro"><b>Ontdek natuurgebieden waar je nog niet bent geweest.</b><br>'
@@ -1095,6 +1114,7 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "username": username,
             "years": year_range,
             "months": selected_months,
+            "quality_label": quality_label,
             "api_total": api_total,
             "observation_total": observation_total,
             "truncated": truncated,
@@ -1146,7 +1166,7 @@ if frame is not None:
             min_value=1, value=1, step=1,
             key="species_overview_minimum",
             help="Toon alleen soorten met minstens dit aantal waarnemingen binnen "
-                 "de gekozen jaren, maanden en overige zoekfilters. Geldt ook voor de CSV-download.",
+                 "de gekozen jaren, maanden en overige zoekfilters. Geldt ook voor de downloads.",
         )
     filtered = filtered[
         filtered["Waarnemingen in gebied"] >= minimum_observations
@@ -1210,20 +1230,25 @@ if frame is not None:
             "de getekende grens hebt waargenomen. Groen betekent dat je haar binnen "
             "én buiten het gebied hebt gezien, ongeacht jaar of maand."
         )
-        if sort_by != "Aantal waarnemingen" and not filtered.empty:
-            with st.spinner("Bewaarde taxonomie laden en ontbrekende soorten aanvullen…"):
-                filtered = enrich_area_taxonomy(filtered.to_json(orient="split"))
-        filtered = sort_species_overview(filtered, sort_by)
-        show_species_grid(
-            filtered,
-            include_personal=True,
-            highlight_unseen=True,
-            seen_here=seen_here,
-            key="mijn_ervaring_per_soort",
-        )
+    if sort_by != "Aantal waarnemingen" and not filtered.empty:
+        with st.spinner("Bewaarde taxonomie laden en ontbrekende soorten aanvullen…"):
+            filtered = enrich_area_taxonomy(filtered.to_json(orient="split"))
+    filtered = sort_species_overview(filtered, sort_by)
+    show_species_grid(
+        filtered,
+        include_personal=personal_ready,
+        highlight_unseen=personal_ready,
+        seen_here=seen_here,
+        key="mijn_ervaring_per_soort",
+        pdf_meta=meta,
+        pdf_sort=sort_by,
+        pdf_minimum=minimum_observations,
+        pdf_username=username,
+        personal_ready=personal_ready,
+    )
 
 st.divider()
 st.caption(
-    "Biodiversiteit Verkenner 1.16 · openbare gegevens van iNaturalist · "
+    "Biodiversiteit Verkenner 1.17 · openbare gegevens van iNaturalist · "
     "je gebruikersnaam wordt alleen gebruikt om openbare waarnemingen te vergelijken."
 )
