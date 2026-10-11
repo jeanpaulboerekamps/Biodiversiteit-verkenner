@@ -41,7 +41,7 @@ SPECIES_GROUPS = {
     "Alle soortgroepen": None,
     "Vogels": 3,
     "Zoogdieren": 40151,
-    "Vissen": 47178,
+    "Vissen": "47178,47273",  # Actinopterygii en Elasmobranchii
     "Bloemdieren": 47533,
     "Reptielen": 26036,
     "Amfibieën": 20978,
@@ -287,7 +287,7 @@ def build_explore_params(year_range, selected_months, quality_value, group_label
     if selected_taxon:
         params["taxon_id"] = int(selected_taxon["id"])
     elif SPECIES_GROUPS[group_label]:
-        params["taxon_id"] = int(SPECIES_GROUPS[group_label])
+        params["taxon_id"] = SPECIES_GROUPS[group_label]
     if len(selected_months) < 12:
         params["month"] = ",".join(str(month) for month in selected_months)
     return params
@@ -699,7 +699,7 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
         if iconic_taxa:
             params["iconic_taxa"] = iconic_taxa
         if taxon_id:
-            params["taxon_id"] = int(taxon_id)
+            params["taxon_id"] = taxon_id
         return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
@@ -747,7 +747,7 @@ def fetch_personal_area_species(username, geometry_json, taxon_id=None):
     west, south, east, north = polygon.bounds
     params = {"user_id": username, "geo": "true", "locale": "en"}
     if taxon_id:
-        params["taxon_id"] = int(taxon_id)
+        params["taxon_id"] = taxon_id
     observations, _, truncated = fetch_observation_tile(
         tuple(sorted(params.items())), (south, west, north, east)
     )
@@ -1021,6 +1021,7 @@ username_col, years_col = st.columns([1, 1])
 with username_col:
     username = st.text_input(
         "Openbare iNaturalist-gebruikersnaam",
+        value="jeanpaulboerekamps",
         help="Nodig voor soorten die je nog nooit hebt gezien en nieuwe families. Geen wachtwoord nodig.",
     ).strip()
 with years_col:
