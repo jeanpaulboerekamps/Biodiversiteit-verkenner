@@ -48,7 +48,7 @@ SPECIES_GROUPS = {
     "Dagvlinders": 47224,  # Papilionoidea
     "Nachtvlinders": 47157,  # Lepidoptera zonder Papilionoidea
     "Libellen": 47792,  # Odonata
-    "Naaktslakken": 48460,  # Nudibranchia (zeenaaktslakken)
+    "Naaktslakken": 47113,  # Nudibranchia (zeenaaktslakken)
     "Insecten": 47158,
     "Spinachtigen": 47119,
     "Weekdieren": 47115,
