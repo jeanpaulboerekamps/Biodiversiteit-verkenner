@@ -474,8 +474,6 @@ def fetch_area_species_count_tile(base_params_tuple, bbox, depth=0):
             "swlat": south, "swlng": west, "nelat": north, "nelng": east,
             "page": page, "per_page": 500,
         })
-        if exclude_taxon_id:
-            params["without_taxon_id"] = exclude_taxon_id
         return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
@@ -707,8 +705,6 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None, exclude_tax
             params["iconic_taxa"] = iconic_taxa
         if taxon_id:
             params["taxon_id"] = taxon_id
-        if exclude_taxon_id:
-            params["without_taxon_id"] = exclude_taxon_id
         return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
