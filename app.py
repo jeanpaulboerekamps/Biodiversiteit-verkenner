@@ -45,7 +45,10 @@ SPECIES_GROUPS = {
     "Bloemdieren": 47533,
     "Reptielen": 26036,
     "Amfibieën": 20978,
-    "Vlinders": 47157,
+    "Dagvlinders": 47224,  # Papilionoidea
+    "Nachtvlinders": 47157,  # Lepidoptera zonder Papilionoidea
+    "Libellen": 47792,  # Odonata
+    "Naaktslakken": 48460,  # Nudibranchia (zeenaaktslakken)
     "Insecten": 47158,
     "Spinachtigen": 47119,
     "Weekdieren": 47115,
@@ -288,6 +291,8 @@ def build_explore_params(year_range, selected_months, quality_value, group_label
         params["taxon_id"] = int(selected_taxon["id"])
     elif SPECIES_GROUPS[group_label]:
         params["taxon_id"] = SPECIES_GROUPS[group_label]
+    if not selected_taxon and group_label == "Nachtvlinders":
+        params["without_taxon_id"] = 47224
     if len(selected_months) < 12:
         params["month"] = ",".join(str(month) for month in selected_months)
     return params
@@ -469,6 +474,8 @@ def fetch_area_species_count_tile(base_params_tuple, bbox, depth=0):
             "swlat": south, "swlng": west, "nelat": north, "nelng": east,
             "page": page, "per_page": 500,
         })
+        if exclude_taxon_id:
+            params["without_taxon_id"] = exclude_taxon_id
         return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
@@ -684,7 +691,7 @@ def enrich_area_taxonomy(frame_json):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
+def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None, exclude_taxon_id=None):
     username = (username or "").strip()
     if not username:
         return {}, set(), 0
@@ -700,6 +707,8 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
             params["iconic_taxa"] = iconic_taxa
         if taxon_id:
             params["taxon_id"] = taxon_id
+        if exclude_taxon_id:
+            params["without_taxon_id"] = exclude_taxon_id
         return request_json(SPECIES_COUNTS_API, params)
 
     first = fetch_page(1)
@@ -741,13 +750,15 @@ def fetch_personal_lifelist(username, iconic_taxa="", taxon_id=None):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_personal_area_species(username, geometry_json, taxon_id=None):
+def fetch_personal_area_species(username, geometry_json, taxon_id=None, exclude_taxon_id=None):
     """Own observation counts per species inside the drawn polygon, across all years."""
     polygon = shape(json.loads(geometry_json))
     west, south, east, north = polygon.bounds
     params = {"user_id": username, "geo": "true", "locale": "en"}
     if taxon_id:
         params["taxon_id"] = taxon_id
+    if exclude_taxon_id:
+        params["without_taxon_id"] = exclude_taxon_id
     observations, _, truncated = fetch_observation_tile(
         tuple(sorted(params.items())), (south, west, north, east)
     )
@@ -1145,6 +1156,7 @@ if st.button("🔎 Gebied verkennen", type="primary", disabled=not can_explore):
             "group_label": group_label,
             "selected_taxon": selected_taxon,
             "iconic_taxa": "",
+            "exclude_taxon_id": 47224 if group_label == "Nachtvlinders" and not selected_taxon else None,
             "taxon_id": (
                 int(selected_taxon["id"])
                 if selected_taxon
@@ -1198,7 +1210,7 @@ if frame is not None:
 
     personal_ready = False
     if username:
-        personal_filter_key = (username, meta.get("iconic_taxa") or "", meta.get("taxon_id"))
+        personal_filter_key = (username, meta.get("iconic_taxa") or "", meta.get("taxon_id"), meta.get("exclude_taxon_id"))
         if st.session_state.personal_loaded_for != personal_filter_key:
             with st.status("Persoonlijke vergelijking laden…", expanded=True) as personal_status:
                 filter_text = chosen_group if chosen_group and chosen_group != "Alle soortgroepen" else "alle soortgroepen"
@@ -1207,6 +1219,7 @@ if frame is not None:
                     username,
                     meta.get("iconic_taxa") or "",
                     meta.get("taxon_id"),
+                    meta.get("exclude_taxon_id"),
                 )
                 st.session_state.personal_counts = counts
                 st.session_state.personal_lineage_ids = lineage_ids
@@ -1225,12 +1238,12 @@ if frame is not None:
     if username and personal_ready:
         geometry = normalize_geometry_longitudes(st.session_state.areas[meta["area"]])
         geometry_json = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
-        area_key = (username, geometry_json, meta.get("taxon_id"))
+        area_key = (username, geometry_json, meta.get("taxon_id"), meta.get("exclude_taxon_id"))
         if st.session_state.personal_area_loaded_for != area_key:
             with st.status("Eigen vondsten binnen de getekende grens controleren…") as area_status:
                 try:
                     st.session_state.personal_area_species = fetch_personal_area_species(
-                        username, geometry_json, meta.get("taxon_id")
+                        username, geometry_json, meta.get("taxon_id"), meta.get("exclude_taxon_id")
                     )
                     st.session_state.personal_area_loaded_for = area_key
                     area_status.update(label="Eigen vondsten in gebied gecontroleerd", state="complete")
